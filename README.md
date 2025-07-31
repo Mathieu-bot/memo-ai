@@ -1,87 +1,87 @@
-# MemoAI - Aide à la mémorisation pour étudiants
+# MemoAI - Memorization Assistant for Students
 
-MemoAI est une application qui aide les étudiants à mémoriser leurs cours en utilisant l'intelligence artificielle pour générer des résumés, des quiz et des flashcards à partir de leurs notes de cours.
+MemoAI is an application that helps students memorize their lessons using artificial intelligence to generate summaries, quizzes, and flashcards from their course notes.
 
-## Fonctionnalités
+## Features
 
-- **Gestion des cours**: Organisez vos cours et leurs contenus
-- **Notes de cours**: Ajoutez vos notes et obtenez des résumés générés par IA
-- **Génération de quiz**: Créez des quiz pour tester vos connaissances
-- **Flashcards**: Générez des flashcards pour la mémorisation active
-- **Upload de vidéos**: Stockez vos vidéos de cours dans le cloud (Cloudinary)
-- **Transcription de vidéos**: Obtenez des transcriptions de vos vidéos
-- **Mode hors ligne**: Utilisez l'application même sans connexion internet
+- **Course Management**: Organize your courses and their content
+- **Course Notes**: Add your notes and get AI-generated summaries
+- **Quiz Generation**: Create quizzes to test your knowledge
+- **Flashcards**: Generate flashcards for active recall
+- **Video Upload**: Store your course videos in the cloud (Cloudinary)
+- **Video Transcription**: Get transcriptions of your videos
+- **Offline Mode**: Use the app even without an internet connection
 
 ## Installation
 
-1. Clonez ce dépôt
+1. Clone this repository
    ```bash
-   git clone https://github.com/votre-username/memoai.git
+   git clone https://github.com/your-username/memoai.git
    cd memoai
    ```
 
-2. Créez un environnement virtuel et installez les dépendances
+2. Create a virtual environment and install dependencies
    ```bash
    python -m venv venv
-   source venv/bin/activate  # Sur Windows: venv\Scripts\activate
+   source venv/bin/activate  # Windows: venv\Scripts\activate
    pip install -r requirements.txt
    ```
 
-3. Copiez le fichier .env.example en .env et configurez vos variables d'environnement
+3. Copy the .env.example file to .env and configure your environment variables
    ```bash
    cp .env.example .env
-   # Modifiez le fichier .env avec vos propres clés API
+   # Edit .env file with your API key
    ```
 
-4. Initialisez la base de données
+4. Initialize the database
    ```bash
    python init_db.py
    ```
 
-5. Lancez l'application
+5. Start the application
    ```bash
    uvicorn app.main:app --reload
    ```
 
-6. Accédez à l'API à l'adresse http://localhost:8000
+6. Access the API at http://localhost:8000
 
-7. La documentation de l'API est disponible à http://localhost:8000/docs
+7. The API documentation is available at http://localhost:8000/docs
 
-## Technologies utilisées
+## Technologies Used
 
 - **Backend**: FastAPI, SQLAlchemy
-- **Base de données**: SQLite (peut être facilement remplacé par PostgreSQL)
-- **Intelligence artificielle**: OpenAI GPT-3.5
-- **Stockage de vidéos**: Cloudinary
+- **DataBase**: SQLite (peut être facilement remplacé par PostgreSQL)
+- **Artificial intelligence**: OpenAI GPT-3.5
+- **Video storage**: Cloudinary
 
-## Structure du projet
+## Project structure
 
 ```
 memoai/
 ├── app/
-│   ├── models/       # Modèles de base de données SQLAlchemy
-│   ├── routes/       # Points d'entrée de l'API
-│   ├── schemas/      # Schémas Pydantic pour la validation
-│   ├── services/     # Services (IA, Cloudinary, etc.)
-│   └── main.py       # Point d'entrée principal
-├── .env              # Variables d'environnement
-├── .env.example      # Exemple de variables d'environnement
-├── init_db.py        # Script d'initialisation de la base de données
-└── README.md         # Ce fichier
+│   ├── models/       # SQLAlchemy database models
+│   ├── routes/       # API endpoints
+│   ├── schemas/      # Pydantic schemas for validation
+│   ├── services/     # Services (AI, Cloudinary, etc.)
+│   └── main.py       # Main entry point
+├── .env              # Environment variables
+├── .env.example      # Example environment variables
+├── init_db.py        # Database initialization script
+└── README.md         # This file
 ```
 
-## Fonctionnalités à venir
+## Upcoming Features
 
-- Application mobile avec fonctionnalités hors ligne
-- Système d'authentification des utilisateurs
-- Partage de quiz et de notes entre étudiants
-- Statistiques d'apprentissage et suivi des progrès
-- Intégration avec des plateformes d'apprentissage populaires
+- Mobile app with offline capabilities
+- User authentication system
+- Sharing of quizzes and notes between students
+- Learning statistics and progress tracking
+- Integration with popular learning platforms
 
-## Contribution
+## Contributing
 
-Les contributions sont les bienvenues ! Veuillez consulter notre guide de contribution pour plus de détails.
+Contributions are welcome! Please check our contribution guide for more details.
 
-## Licence
+## License
 
-Ce projet est sous licence MIT. Voir le fichier LICENSE pour plus de détails.
+This project is licensed under the MIT License. See the LICENSE file for more information.
