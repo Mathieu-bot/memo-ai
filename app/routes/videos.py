@@ -13,11 +13,11 @@ router = APIRouter(prefix="/videos", tags=["videos"])
 
 @router.get("/", response_model=List[Video])
 def get_videos(
-    skip: int = 0, 
-    limit: int = 100, 
-    title: Optional[str] = None,
-    course_id: Optional[int] = None,
-    db: Session = Depends(get_db)
+        skip: int = 0,
+        limit: int = 100,
+        title: Optional[str] = None,
+        course_id: Optional[int] = None,
+        db: Session = Depends(get_db)
 ):
     ## Get all videos with options of filtering.
     query = db.query(VideoModel)
@@ -56,11 +56,14 @@ def upload_video(video_data: VideoUpload, generate_transcript: bool = True, db: 
         db.refresh(db_video)
         return db_video
 
+    except ValueError as e:
+        db.rollback()
+        raise HTTPException(status_code=400, detail=str(e))  # binascii.Error (invalid Base64)
     except Exception as e:
         db.rollback()
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Erreur lors de l'upload de la vidéo: {str(e)}"
+            detail=f"Error while uploading the video: {str(e)}"
         )
 
 @router.get("/{video_id}", response_model=VideoWithTranscript)
@@ -98,7 +101,10 @@ def delete_video(video_id: int, db: Session = Depends(get_db)):
     try:
         CloudinaryService.delete_video(db_video.cloudinary_public_id)
     except Exception as e:
-        print(f"Error while deleting video in cloudinary: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Error while deleting video in Cloudinary: {str(e)}"
+        )
 
     db.delete(db_video)
     db.commit()
