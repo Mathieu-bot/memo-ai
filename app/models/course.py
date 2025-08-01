@@ -9,4 +9,6 @@ class Course(Base) :
     description = Column(Text, nullable=True)
 
     quizzes = relationship("Quiz", back_populates="course", cascade="all, delete")
+    videos = relationship("Video", back_populates="course", cascade="all, delete")
+    notes = relationship("Note", back_populates="course", cascade="all, delete")
 
