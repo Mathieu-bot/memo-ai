@@ -11,6 +11,7 @@ from sqlalchemy.exc import SQLAlchemyError
 
 def init_db():
     try:
+        Base.registry.configure()
         Base.metadata.create_all(bind=engine)
         print("Database tables created successfully.")
 

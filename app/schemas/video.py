@@ -10,8 +10,8 @@ class VideoBase(BaseModel):
 class VideoCreate(VideoBase):
     pass
 
-class VideoUpload(VideoCreate):
-    file: str  # Base64 encoded string de la vidéo
+class VideoUpload(VideoBase):
+    pass
 
 class VideoUpdate(BaseModel):
     title: Optional[str] = None

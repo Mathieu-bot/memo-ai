@@ -1,13 +1,18 @@
-from fastapi import APIRouter, Depends, HTTPException, status, BackgroundTasks
+from fastapi import APIRouter, Depends, HTTPException, status, File, UploadFile, Form
 from sqlalchemy.orm import Session
-from typing import List, Optional
+from typing import List, Optional, Dict, Any
+import logging
+import re
 
-from app.schemas.video import Video, VideoCreate, VideoUpdate, VideoUpload, VideoWithTranscript
+from app.schemas.video import Video, VideoCreate, VideoUpdate, VideoWithTranscript
 from app.services.db import get_db
 from app.services.ai_service import AIService
 from app.services.cloudinary_service import CloudinaryService
 from app.models.video import Video as VideoModel
 from app.models.course import Course as CourseModel
+
+logging.basicConfig(level=logging.DEBUG)
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/videos", tags=["videos"])
 
@@ -19,7 +24,6 @@ def get_videos(
         course_id: Optional[int] = None,
         db: Session = Depends(get_db)
 ):
-    ## Get all videos with options of filtering.
     query = db.query(VideoModel)
     if title:
         query = query.filter(VideoModel.title.contains(title))
@@ -29,19 +33,51 @@ def get_videos(
     return videos
 
 @router.post("/upload", response_model=Video, status_code=status.HTTP_201_CREATED)
-def upload_video(video_data: VideoUpload, generate_transcript: bool = True, db: Session = Depends(get_db)):
-    course = db.query(CourseModel).filter(CourseModel.id == video_data.course_id).first()
+async def upload_video(
+        file: UploadFile = File(...),
+        title: str = Form(...),
+        description: Optional[str] = Form(None),
+        course_id: int = Form(...),
+        generate_transcript: bool = True,
+        db: Session = Depends(get_db)
+):
+    if not file.content_type.startswith("video/"):
+        logger.error(f"Invalid file type: {file.content_type}")
+        raise HTTPException(status_code=400, detail="Invalid video file format. Only video files (e.g., mp4, webm) are allowed.")
+
+    course = db.query(CourseModel).filter(CourseModel.id == course_id).first()
     if course is None:
+        logger.error(f"Course not found: course_id={course_id}")
         raise HTTPException(status_code=404, detail="Course not found")
 
     try:
-        upload_result = CloudinaryService.upload_video(video_data.file)
+        file_data = await file.read()
+        upload_result: Dict[str, Any] = CloudinaryService.upload_video(file_data)
+
+        required_keys = ["public_id", "secure_url"]
+        missing_keys = [key for key in required_keys if key not in upload_result]
+        if missing_keys:
+            logger.error(f"Missing keys in upload_result: {missing_keys}")
+            raise HTTPException(
+                status_code=500,
+                detail=f"Cloudinary upload failed: missing keys {missing_keys}"
+            )
+
+        secure_url = upload_result["secure_url"]
+        public_id = upload_result["public_id"]
+        if not re.match(r'^https?://', secure_url):
+            logger.error(f"Invalid Cloudinary URL: {secure_url}")
+            raise HTTPException(status_code=400, detail="Invalid Cloudinary URL")
+        if not re.match(r'^[a-zA-Z0-9_-]+$', public_id):
+            logger.error(f"Invalid Cloudinary public ID: {public_id}")
+            raise HTTPException(status_code=400, detail="Invalid Cloudinary public ID")
+
         db_video = VideoModel(
-            title=video_data.title,
-            description=video_data.description,
-            course_id=video_data.course_id,
-            cloudinary_public_id=upload_result["public_id"],
-            cloudinary_url=upload_result["secure_url"],
+            title=title,
+            description=description,
+            course_id=course_id,
+            cloudinary_public_id=public_id,
+            cloudinary_url=secure_url,
             duration=upload_result.get("duration")
         )
 
@@ -54,13 +90,16 @@ def upload_video(video_data: VideoUpload, generate_transcript: bool = True, db: 
 
         db.commit()
         db.refresh(db_video)
+        logger.info(f"Video uploaded successfully: id={db_video.id}, title={title}")
         return db_video
 
     except ValueError as e:
         db.rollback()
-        raise HTTPException(status_code=400, detail=str(e))  # binascii.Error (invalid Base64)
+        logger.error(f"ValueError during video upload: {str(e)}")
+        raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         db.rollback()
+        logger.error(f"Unexpected error during video upload: {str(e)}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Error while uploading the video: {str(e)}"
@@ -117,7 +156,6 @@ def regenerate_transcript(video_id: int, db: Session = Depends(get_db)):
         raise HTTPException(status_code=404, detail="Video not found")
 
     db_video.transcript = AIService.generate_transcript(db_video.cloudinary_url)
-
     db.commit()
     db.refresh(db_video)
     return db_video

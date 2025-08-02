@@ -1,6 +1,7 @@
-from fastapi import APIRouter, Depends, HTTPException, status, BackgroundTasks
+from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 from typing import Dict, Any
+import logging
 
 from app.services.db import get_db
 from app.services.ai_service import AIService
@@ -9,9 +10,12 @@ from app.models.quiz import Quiz as QuizModel
 from app.models.question import Question as QuestionModel
 from app.models.answer import Answer as AnswerModel
 
+logging.basicConfig(level=logging.DEBUG)
+logger = logging.getLogger(__name__)
+
 router = APIRouter(prefix="/ai", tags=["ai"])
 
-@router.post("/generate-quiz/{course_id}", status_code=status.HTTP_202_ACCEPTED)
+@router.post("/generate-quiz/{course_id}", status_code=status.HTTP_201_CREATED)
 def generate_quiz(course_id: int, num_questions: int = 5, db: Session = Depends(get_db)):
     course = db.query(CourseModel).filter(CourseModel.id == course_id).first()
     if course is None:
@@ -29,7 +33,7 @@ def generate_quiz(course_id: int, num_questions: int = 5, db: Session = Depends(
         course_id=course_id
     )
     db.add(db_quiz)
-    db.flush() # get quiz id
+    db.flush()  # get quiz id
 
     for question_data in quiz_data["questions"]:
         db_question = QuestionModel(
@@ -50,4 +54,4 @@ def generate_quiz(course_id: int, num_questions: int = 5, db: Session = Depends(
 
     db.commit()
 
-    return {"message": "Quiz generation started", "quiz_id": db_quiz.id}
+    return {"message": "Quiz generated successfully", "quiz_id": db_quiz.id}

@@ -18,7 +18,7 @@ MemoAI is an application that helps students memorize their lessons using artifi
    ```bash
    git clone https://github.com/your-username/memoai.git
    cd memoai
-   ```
+   ````
 
 2. Create a virtual environment and install dependencies
    ```bash
@@ -50,8 +50,8 @@ MemoAI is an application that helps students memorize their lessons using artifi
 ## Technologies Used
 
 - **Backend**: FastAPI, SQLAlchemy
-- **DataBase**: SQLite (peut être facilement remplacé par PostgreSQL)
-- **Artificial intelligence**: OpenAI GPT-3.5
+- **DataBase**: PostgreSQL
+- **Artificial intelligence**: OpenAI GPT-3.5, Whisper
 - **Video storage**: Cloudinary
 
 ## Project structure

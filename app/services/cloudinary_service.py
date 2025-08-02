@@ -2,7 +2,6 @@ import os
 import cloudinary
 import cloudinary.uploader
 import cloudinary.api
-import base64
 import tempfile
 from typing import Dict, Any
 import logging
@@ -18,9 +17,8 @@ cloudinary.config(
 
 class CloudinaryService:
     @staticmethod
-    def upload_video(file_base64: str, resource_type: str = "video", folder: str = "course_videos") -> Dict[str, Any]:
+    def upload_video(file_data: bytes, resource_type: str = "video", folder: str = "course_videos") -> Dict[str, Any]:
         try:
-            file_data = base64.b64decode(file_base64)
             with tempfile.NamedTemporaryFile(delete=False, suffix=".mp4") as temp_file:
                 temp_file.write(file_data)
                 temp_file_path = temp_file.name
@@ -45,9 +43,6 @@ class CloudinaryService:
                 "duration": result.get("duration")
             }
 
-        except base64.binascii.Error:
-            logger.error("Invalid Base64 encoding")
-            raise ValueError("Invalid Base64 data provided")
         except IOError as e:
             logger.error(f"File operation failed: {e}")
             raise
