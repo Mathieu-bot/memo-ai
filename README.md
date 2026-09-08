@@ -76,6 +76,26 @@ MemoAI helps students memorize their lessons using AI to generate summaries, qui
 7. Access the API at http://localhost:8000
    - Interactive docs: http://localhost:8000/docs
 
+## Running with Docker
+
+Requires [Docker](https://docs.docker.com/get-docker/) and Docker Compose.
+
+```bash
+# 1. Configure the environment (create your JWT_SECRET too)
+cp .env.example .env
+
+# 2. Build and start
+docker-compose up --build
+```
+
+Notes:
+- Database tables are created and seeded automatically on container start
+  (`docker-entrypoint.sh` runs `init_db.py`, it is idempotent).
+- The SQLite file lives in the `data/` folder (bind-mounted from `./data`).
+  Delete it to reset the database.
+- `DATABASE_URL` is overridden by `docker-compose.yml` to point to `/data/memoai.db`.
+- The API listens on http://localhost:8000 (or `http://localhost:8000/docs`).
+
 ## Authentication
 
 Accounts use **email as login identifier** + a **unique username**. Email

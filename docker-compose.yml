@@ -1,0 +1,28 @@
+version: "3.8"
+
+services:
+  api:
+    build: .
+    container_name: memoai-api
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env
+    environment:
+      # Absolute path inside the container; volume below persists it.
+      DATABASE_URL: sqlite+aiosqlite:////data/memoai.db
+    volumes:
+      - ./data:/data
+    restart: unless-stopped
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://localhost:8000/docs')",
+        ]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
