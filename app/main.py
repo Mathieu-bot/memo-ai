@@ -1,16 +1,45 @@
 from fastapi import FastAPI
-from dotenv import load_dotenv
-import os
+from fastapi.middleware.cors import CORSMiddleware
 
-from app.routes import courses
-from app.routes import quizzes
-load_dotenv()
+from app.config import get_settings
+from app.exceptions import (
+    AIServiceError,
+    NotFoundError,
+    ai_service_handler,
+    global_exception_handler,
+    not_found_handler,
+)
+from app.routers import ai, courses, notes, quizzes, videos
 
-app = FastAPI()
+settings = get_settings()
 
-app.include_router(courses.router)
-app.include_router(quizzes.router)
 
-if __name__ == "__main__":
-    import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=int(os.getenv("PORT", 8000)))
+def create_app() -> FastAPI:
+    app = FastAPI(
+        title="MemoAI API",
+        description="Memorization assistant API for students",
+        version="2.0.0",
+    )
+
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=settings.CORS_ORIGINS,
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
+
+    app.include_router(courses.router)
+    app.include_router(quizzes.router)
+    app.include_router(notes.router)
+    app.include_router(videos.router)
+    app.include_router(ai.router)
+
+    app.add_exception_handler(NotFoundError, not_found_handler)
+    app.add_exception_handler(AIServiceError, ai_service_handler)
+    app.add_exception_handler(Exception, global_exception_handler)
+
+    return app
+
+
+app = create_app()
