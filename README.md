@@ -1,6 +1,8 @@
 # MemoAI - Memorization Assistant for Students
 
-MemoAI is an application that helps students memorize their lessons using artificial intelligence to generate summaries, quizzes, and flashcards from their course notes.
+[![CI](https://github.com/jiu/memo-ai/actions/workflows/ci.yml/badge.svg)](https://github.com/jiu/memo-ai/actions/workflows/ci.yml)
+
+MemoAI helps students memorize their lessons using AI to generate summaries, quizzes, and flashcards from their course notes and videos.
 
 ## Features
 
@@ -10,7 +12,14 @@ MemoAI is an application that helps students memorize their lessons using artifi
 - **Flashcards**: Generate flashcards for active recall
 - **Video Upload**: Store your course videos in the cloud (Cloudinary)
 - **Video Transcription**: Get transcriptions of your videos
-- **Offline Mode**: Use the app even without an internet connection
+
+## AI Stack ($0 budget)
+
+| Task | Provider | Model | Free Tier |
+|------|----------|-------|-----------|
+| Text generation (quizzes, summaries, flashcards) | Google Gemini | `gemini-2.5-flash` | 10 RPM, 1500 RPD |
+| Audio transcription | Groq | `whisper-large-v3-turbo` | ~8 hours of audio/day |
+| Video storage | Cloudinary | - | 25 GB, 25 credits/month |
 
 ## Installation
 
@@ -27,60 +36,117 @@ MemoAI is an application that helps students memorize their lessons using artifi
    pip install -r requirements.txt
    ```
 
-3. Copy the .env.example file to .env and configure your environment variables
+3. Copy the `.env.example` file to `.env` and configure your environment variables
    ```bash
    cp .env.example .env
-   # Edit .env file with your API key
    ```
 
-4. Initialize the database
+4. Get free API keys
+   - **Gemini**: https://aistudio.google.com (generate `GEMINI_API_KEY`)
+   - **Groq**: https://console.groq.com (generate `GROQ_API_KEY`)
+   - **Cloudinary**: https://cloudinary.com (free account)
+
+5. Initialize the database
    ```bash
    python init_db.py
    ```
 
-5. Start the application
+6. Start the application
    ```bash
    uvicorn app.main:app --reload
    ```
 
-6. Access the API at http://localhost:8000
+7. Access the API at http://localhost:8000
+   - Interactive docs: http://localhost:8000/docs
 
-7. The API documentation is available at http://localhost:8000/docs
+## Development Workflow
+
+- **Formatting & linting** are handled by [Ruff](https://docs.astral.sh/ruff/) (Python's
+  equivalent of Prettier/ESLint). Install it once: `pip install -r requirements.txt`
+
+```bash
+ruff check .              # lint
+ruff format .             # auto-format (like prettier --write)
+ruff format --check .     # verify in CI
+```
+
+- **CI** runs automatically on every push/PR via GitHub Actions
+  (`.github/workflows/ci.yml`): lint checks, format checks, and the full
+  test suite on Python 3.11 & 3.12.
+
+## Running Tests
+
+```bash
+pytest tests/ -v
+```
 
 ## Technologies Used
 
-- **Backend**: FastAPI, SQLAlchemy
-- **DataBase**: SQLite (peut être facilement remplacé par PostgreSQL)
-- **Artificial intelligence**: OpenAI GPT-3.5
+- **Backend**: FastAPI, SQLAlchemy 2.0
+- **Database**: SQLite by default (easily switchable to PostgreSQL via `DATABASE_URL`)
+- **AI**: Google Gemini (text), Groq Whisper (transcription)
 - **Video storage**: Cloudinary
+- **Validation**: Pydantic v2
+- **Linting & formatting**: Ruff
 
-## Project structure
+## Project Structure
 
 ```
 memoai/
 ├── app/
-│   ├── models/       # SQLAlchemy database models
-│   ├── routes/       # API endpoints
-│   ├── schemas/      # Pydantic schemas for validation
-│   ├── services/     # Services (AI, Cloudinary, etc.)
-│   └── main.py       # Main entry point
-├── .env              # Environment variables
-├── .env.example      # Example environment variables
-├── init_db.py        # Database initialization script
-└── README.md         # This file
+│   ├── main.py               # App factory, middleware, router registration
+│   ├── config.py             # Pydantic Settings (all configuration)
+│   ├── database.py           # Engine, session, base
+│   ├── dependencies.py       # Shared FastAPI dependencies
+│   ├── exceptions.py         # Business exceptions + global handlers
+│   ├── models/               # SQLAlchemy models (one file per entity)
+│   ├── schemas/              # Pydantic v2 schemas (one file per domain)
+│   ├── routers/              # Thin HTTP layer (one file per resource)
+│   └── services/
+│       ├── ai/               # Abstract AI provider + Gemini + domain services
+│       │   ├── base.py           # AIProvider interface
+│       │   ├── gemini.py         # Gemini implementation (retry/backoff)
+│       │   ├── quiz_generator.py
+│       │   ├── summary_service.py
+│       │   ├── flashcard_service.py
+│       │   └── transcription_service.py  # Groq Whisper + chunking
+│       ├── cloudinary_service.py
+│       └── video_service.py
+├── tests/                    # pytest suite
+├── .env.example
+├── init_db.py
+└── README.md
 ```
 
-## Upcoming Features
+## Architecture Principles
 
-- Mobile app with offline capabilities
-- User authentication system
-- Sharing of quizzes and notes between students
-- Learning statistics and progress tracking
-- Integration with popular learning platforms
+- **Single Responsibility**: routers handle HTTP, services handle business logic,
+  models handle persistence, schemas handle validation
+- **Abstract AI provider**: swap Gemini for another provider by implementing the
+  `AIProvider` interface
+- **Graceful degradation**: if no AI key is configured, notes still save (summary
+  stays null) and AI endpoints return clean `503` responses
+- **Retry with exponential backoff**: transient AI rate limits are handled
+  automatically (3 attempts max)
+- **Automatic audio chunking**: videos larger than 25 MB are chunked with ffmpeg
+  to stay within Groq's free tier upload limit
 
-## Contributing
+## API Endpoints
 
-Contributions are welcome! Please check our contribution guide for more details.
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET/POST | `/courses/` | List / create courses |
+| GET/PUT/DELETE | `/courses/{id}` | Get / update / delete a course |
+| GET/POST | `/quizzes/` | List / create quizzes |
+| GET/PUT/DELETE | `/quizzes/{id}` | Get / update / delete a quiz |
+| GET/POST | `/notes/` | List / create notes |
+| GET/PUT/DELETE | `/notes/{id}` | Get / update / delete a note |
+| POST | `/notes/{id}/summarize` | Generate AI summary |
+| POST | `/notes/{id}/generate-flashcards` | Generate AI flashcards |
+| GET/POST | `/videos/` | List / upload videos (multipart) |
+| GET/PUT/DELETE | `/videos/{id}` | Get / update / delete a video |
+| POST | `/videos/{id}/regenerate-transcript` | Regenerate AI transcript |
+| POST | `/ai/generate-quiz/{course_id}` | Generate AI quiz for a course |
 
 ## License
 
