@@ -1,4 +1,16 @@
 venv/
+.venv/
 __pycache__/
 *.pyc
+*.pyo
+*.db
+*.sqlite3
 .env
+.env.local
+.idea/
+.vscode/
+*.egg-info/
+dist/
+build/
+.pytest_cache/
+.mypy_cache/
