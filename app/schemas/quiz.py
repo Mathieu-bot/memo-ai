@@ -1,29 +1,32 @@
+from pydantic import BaseModel, ConfigDict
 
-from pydantic import BaseModel
-from typing import Optional, List
 from app.schemas.question import Question
+
 
 class QuizBase(BaseModel):
     title: str
-    description: Optional[str] = None
+    description: str | None = None
     course_id: int
+
 
 class QuizCreate(QuizBase):
     pass
 
-class QuizUpdate(QuizBase):
-    title: Optional[str] = None
-    course_id: Optional[int] = None
+
+class QuizUpdate(BaseModel):
+    title: str | None = None
+    description: str | None = None
+    course_id: int | None = None
+
 
 class QuizInDBBase(QuizBase):
     id: int
-    class Config:
-        orm_mode = True
+    model_config = ConfigDict(from_attributes=True)
+
 
 class Quiz(QuizInDBBase):
     pass
 
+
 class QuizWithQuestions(Quiz):
-    questions: List[Question] = []
-    class Config:
-        orm_mode = True
+    questions: list[Question] = []

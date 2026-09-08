@@ -1,37 +1,44 @@
-from pydantic import BaseModel
-from typing import Optional
 from datetime import datetime
+
+from pydantic import BaseModel, ConfigDict
+
 
 class VideoBase(BaseModel):
     title: str
-    description: Optional[str] = None
+    description: str | None = None
     course_id: int
+
 
 class VideoCreate(VideoBase):
     pass
 
-class VideoUpload(VideoCreate):
-    file: str  # Base64 encoded string de la vidéo
+
+class VideoUpload(BaseModel):
+    title: str
+    description: str | None = None
+    course_id: int
+
 
 class VideoUpdate(BaseModel):
-    title: Optional[str] = None
-    description: Optional[str] = None
-    course_id: Optional[int] = None
+    title: str | None = None
+    description: str | None = None
+    course_id: int | None = None
+
 
 class VideoInDBBase(VideoBase):
     id: int
     cloudinary_public_id: str
     cloudinary_url: str
-    duration: Optional[int] = None
-    transcript: Optional[str] = None
+    duration: int | None = None
+    transcript: str | None = None
     created_at: datetime
     is_synchronized: bool
+    model_config = ConfigDict(from_attributes=True)
 
-    class Config:
-        orm_mode = True
 
 class Video(VideoInDBBase):
     pass
+
 
 class VideoWithTranscript(Video):
     pass

@@ -1,21 +1,24 @@
-from pydantic import BaseModel
-from typing import Optional
+from pydantic import BaseModel, ConfigDict
 
-class CourseBase(BaseModel) :
+
+class CourseBase(BaseModel):
     title: str
-    description: Optional[str] = None
+    description: str | None = None
 
-class CourseCreate(CourseBase) :
+
+class CourseCreate(CourseBase):
     pass
 
-class CourseUpdate(CourseBase) :
-    pass
 
-class CourseInDBBase(CourseBase) :
+class CourseUpdate(BaseModel):
+    title: str | None = None
+    description: str | None = None
+
+
+class CourseInDBBase(CourseBase):
     id: int
+    model_config = ConfigDict(from_attributes=True)
 
-    class Config :
-        orm_mode = True  # pour pouvoir retourner un modèle SQLAlchemy directement
 
-class Course(CourseInDBBase) :
+class Course(CourseInDBBase):
     pass

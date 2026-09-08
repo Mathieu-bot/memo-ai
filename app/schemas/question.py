@@ -1,27 +1,32 @@
-from pydantic import BaseModel
-from typing import Optional, List
+from pydantic import BaseModel, ConfigDict
+
 from app.schemas.answer import Answer
+
 
 class QuestionBase(BaseModel):
     text: str
-    explanation: Optional[str] = None
+    explanation: str | None = None
     quiz_id: int
+
 
 class QuestionCreate(QuestionBase):
     pass
 
-class QuestionUpdate(QuestionBase):
-    text: Optional[str] = None
-    quiz_id: Optional[int] = None
+
+class QuestionUpdate(BaseModel):
+    text: str | None = None
+    explanation: str | None = None
+    quiz_id: int | None = None
+
 
 class QuestionInDBBase(QuestionBase):
     id: int
+    model_config = ConfigDict(from_attributes=True)
 
-    class Config:
-        orm_mode = True
 
 class Question(QuestionInDBBase):
     pass
 
+
 class QuestionWithAnswers(Question):
-    answers: List[Answer] = []
+    answers: list[Answer] = []

@@ -1,31 +1,35 @@
-from pydantic import BaseModel
-from typing import Optional
 from datetime import datetime
+
+from pydantic import BaseModel, ConfigDict
+
 
 class NoteBase(BaseModel):
     title: str
     content: str
     course_id: int
 
+
 class NoteCreate(NoteBase):
     pass
 
+
 class NoteUpdate(BaseModel):
-    title: Optional[str] = None
-    content: Optional[str] = None
-    course_id: Optional[int] = None
+    title: str | None = None
+    content: str | None = None
+    course_id: int | None = None
+
 
 class NoteInDBBase(NoteBase):
     id: int
-    summary: Optional[str] = None
+    summary: str | None = None
     created_at: datetime
     updated_at: datetime
+    model_config = ConfigDict(from_attributes=True)
 
-    class Config:
-        orm_mode = True
 
 class Note(NoteInDBBase):
     pass
+
 
 class NoteWithSummary(Note):
     pass

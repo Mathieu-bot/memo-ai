@@ -1,1 +1,43 @@
-# Ce fichier permet l'importation facile des schémas
+from app.schemas.answer import Answer, AnswerCreate, AnswerUpdate
+from app.schemas.course import Course, CourseCreate, CourseUpdate
+from app.schemas.note import Note, NoteCreate, NoteUpdate, NoteWithSummary
+from app.schemas.question import (
+    Question,
+    QuestionCreate,
+    QuestionUpdate,
+    QuestionWithAnswers,
+)
+from app.schemas.quiz import Quiz, QuizCreate, QuizUpdate, QuizWithQuestions
+from app.schemas.video import (
+    Video,
+    VideoCreate,
+    VideoUpdate,
+    VideoUpload,
+    VideoWithTranscript,
+)
+
+__all__ = [
+    "Course",
+    "CourseCreate",
+    "CourseUpdate",
+    "Quiz",
+    "QuizCreate",
+    "QuizUpdate",
+    "QuizWithQuestions",
+    "Question",
+    "QuestionCreate",
+    "QuestionUpdate",
+    "QuestionWithAnswers",
+    "Answer",
+    "AnswerCreate",
+    "AnswerUpdate",
+    "Note",
+    "NoteCreate",
+    "NoteUpdate",
+    "NoteWithSummary",
+    "Video",
+    "VideoCreate",
+    "VideoUpdate",
+    "VideoUpload",
+    "VideoWithTranscript",
+]
