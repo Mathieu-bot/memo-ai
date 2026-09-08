@@ -6,6 +6,8 @@ MemoAI helps students memorize their lessons using AI to generate summaries, qui
 
 ## Features
 
+- **User Authentication**: email-based accounts with unique usernames, JWT login
+  and mandatory email verification
 - **Course Management**: Organize your courses and their content
 - **Course Notes**: Add your notes and get AI-generated summaries
 - **Quiz Generation**: Create quizzes to test your knowledge
@@ -40,8 +42,23 @@ MemoAI helps students memorize their lessons using AI to generate summaries, qui
    ```bash
    cp .env.example .env
    ```
+   Then generate a strong `JWT_SECRET`:
+   ```bash
+   python -c "import secrets; print(secrets.token_urlsafe(64))"
+   ```
 
-4. Get free API keys
+4. Install the `ffmpeg` system requirement (used to chunk large videos before
+   transcription, see [Architecture Principles](#architecture-principles))
+   ```bash
+   # Debian/Ubuntu
+   sudo apt install ffmpeg
+   # macOS
+   brew install ffmpeg
+   # Windows (via winget)
+   winget install ffmpeg
+   ```
+
+5. Get free API keys
    - **Gemini**: https://aistudio.google.com (generate `GEMINI_API_KEY`)
    - **Groq**: https://console.groq.com (generate `GROQ_API_KEY`)
    - **Cloudinary**: https://cloudinary.com (free account)
@@ -58,6 +75,43 @@ MemoAI helps students memorize their lessons using AI to generate summaries, qui
 
 7. Access the API at http://localhost:8000
    - Interactive docs: http://localhost:8000/docs
+
+## Authentication
+
+Accounts use **email as login identifier** + a **unique username**. Email
+**verification is mandatory**: new users must verify their email before they can
+use the API. In this MVP the verification link is printed to the server logs
+(in production, hook it to a real email service via `on_after_request_verify`
+in `app/auth.py`).
+
+```bash
+# 1. Register (returns the user; is_verified is False)
+curl -X POST http://localhost:8000/auth/register \
+  -H "Content-Type: application/json" \
+  -d '{"email":"student@example.com","password":"password123","username":"alice"}'
+
+# 2. Request a verification token
+curl -X POST http://localhost:8000/auth/request-verify-token \
+  -H "Content-Type: application/json" \
+  -d '{"email":"student@example.com"}'
+
+# 3. Verify with the token logged by the server
+curl -X POST http://localhost:8000/auth/verify \
+  -H "Content-Type: application/json" \
+  -d '{"token":"<token-from-server-logs>"}'
+
+# 4. Login (form data) -> access_token
+curl -X POST http://localhost:8000/auth/login \
+  -H "Content-Type: application/x-www-form-urlencoded" \
+  -d 'username=student@example.com&password=password123'
+
+# 5. Use the token on any protected endpoint
+curl http://localhost:8000/courses/ \
+  -H "Authorization: Bearer <access_token>"
+```
+
+All endpoints except `/auth/*` and `/users/*` require a verified, authenticated
+user.
 
 ## Development Workflow
 
@@ -82,8 +136,8 @@ pytest tests/ -v
 
 ## Technologies Used
 
-- **Backend**: FastAPI, SQLAlchemy 2.0
-- **Database**: SQLite by default (easily switchable to PostgreSQL via `DATABASE_URL`)
+- **Backend**: FastAPI, SQLAlchemy 2.0 (async), fastapi-users (auth), PyJWT
+- **Database**: SQLite via aiosqlite by default (easily switchable to PostgreSQL via `DATABASE_URL`)
 - **AI**: Google Gemini (text), Groq Whisper (transcription)
 - **Video storage**: Cloudinary
 - **Validation**: Pydantic v2
@@ -96,7 +150,8 @@ memoai/
 ├── app/
 │   ├── main.py               # App factory, middleware, router registration
 │   ├── config.py             # Pydantic Settings (all configuration)
-│   ├── database.py           # Engine, session, base
+│   ├── auth.py               # fastapi-users wiring (JWT, verification)
+│   ├── database.py           # Async engine, session, base
 │   ├── dependencies.py       # Shared FastAPI dependencies
 │   ├── exceptions.py         # Business exceptions + global handlers
 │   ├── models/               # SQLAlchemy models (one file per entity)
@@ -135,6 +190,15 @@ memoai/
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
+| POST | `/auth/register` | Create an account (email, password, username) |
+| POST | `/auth/login` | Login with email + password (form data) -> JWT |
+| POST | `/auth/logout` | Invalidate the current token |
+| POST | `/auth/request-verify-token` | Request an email verification token |
+| POST | `/auth/verify` | Verify an email with a token |
+| POST | `/auth/forgot-password` | Request a password reset token |
+| POST | `/auth/reset-password` | Reset the password with a token |
+| GET/PATCH | `/users/me` | Get / update the current user |
+| GET/PATCH/DELETE | `/users/{id}` | Get / update / delete a user (authenticated) |
 | GET/POST | `/courses/` | List / create courses |
 | GET/PUT/DELETE | `/courses/{id}` | Get / update / delete a course |
 | GET/POST | `/quizzes/` | List / create quizzes |
