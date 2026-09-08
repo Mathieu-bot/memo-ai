@@ -2,6 +2,16 @@
 testpaths = ["tests"]
 addopts = "-q"
 
+[tool.coverage.run]
+# Measure coverage of the application code only (not the tests themselves).
+source = ["app"]
+
+[tool.coverage.report]
+# Fail the build if the overall coverage drops below 80%.
+fail_under = 80
+show_missing = true
+skip_covered = false
+
 [tool.ruff]
 line-length = 88
 target-version = "py311"
