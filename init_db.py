@@ -1,27 +1,30 @@
+import asyncio
 import logging
 
+from sqlalchemy import func, select
 from sqlalchemy.exc import SQLAlchemyError
-from sqlalchemy.orm import Session
 
-from app.database import Base, engine
+from app.database import Base, SessionLocal, engine
 from app.models import Course
 
 logger = logging.getLogger(__name__)
 
 
-def init_db():
+async def init_db():
     try:
-        Base.metadata.create_all(bind=engine)
+        async with engine.begin() as conn:
+            await conn.run_sync(Base.metadata.create_all)
         logger.info("Database tables created successfully.")
 
-        with Session(engine) as session:
-            if session.query(Course).count() == 0:
+        async with SessionLocal() as session:
+            count = await session.execute(select(func.count()).select_from(Course))
+            if count.scalar_one() == 0:
                 course = Course(
                     title="Introduction to Python",
                     description="Learn Python basics",
                 )
                 session.add(course)
-                session.commit()
+                await session.commit()
                 logger.info("Initial data (course) seeded successfully.")
             else:
                 logger.info("Database already contains data, skipping seeding.")
@@ -35,4 +38,4 @@ def init_db():
 
 
 if __name__ == "__main__":
-    init_db()
+    asyncio.run(init_db())

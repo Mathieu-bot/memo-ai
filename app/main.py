@@ -1,6 +1,7 @@
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from app.auth import current_user
 from app.config import get_settings
 from app.exceptions import (
     AIServiceError,
@@ -9,7 +10,7 @@ from app.exceptions import (
     global_exception_handler,
     not_found_handler,
 )
-from app.routers import ai, courses, notes, quizzes, videos
+from app.routers import ai, auth, courses, notes, quizzes, videos
 
 settings = get_settings()
 
@@ -29,11 +30,12 @@ def create_app() -> FastAPI:
         allow_headers=["*"],
     )
 
-    app.include_router(courses.router)
-    app.include_router(quizzes.router)
-    app.include_router(notes.router)
-    app.include_router(videos.router)
-    app.include_router(ai.router)
+    app.include_router(auth.router)
+    app.include_router(courses.router, dependencies=[Depends(current_user)])
+    app.include_router(quizzes.router, dependencies=[Depends(current_user)])
+    app.include_router(notes.router, dependencies=[Depends(current_user)])
+    app.include_router(videos.router, dependencies=[Depends(current_user)])
+    app.include_router(ai.router, dependencies=[Depends(current_user)])
 
     app.add_exception_handler(NotFoundError, not_found_handler)
     app.add_exception_handler(AIServiceError, ai_service_handler)

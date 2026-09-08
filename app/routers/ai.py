@@ -1,7 +1,8 @@
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy.orm import Session
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.dependencies import get_db
 from app.exceptions import AIServiceError, NotFoundError
@@ -17,10 +18,13 @@ router = APIRouter(prefix="/ai", tags=["ai"])
 @router.post("/generate-quiz/{course_id}", status_code=status.HTTP_201_CREATED)
 async def generate_quiz(
     course_id: int,
-    db: Annotated[Session, Depends(get_db)],
+    db: Annotated[AsyncSession, Depends(get_db)],
     num_questions: int = 5,
 ):
-    course = db.query(CourseModel).filter(CourseModel.id == course_id).first()
+    course_result = await db.execute(
+        select(CourseModel).where(CourseModel.id == course_id)
+    )
+    course = course_result.scalar_one_or_none()
     if course is None:
         raise NotFoundError("Course", course_id)
 
@@ -50,7 +54,7 @@ async def generate_quiz(
         course_id=course_id,
     )
     db.add(db_quiz)
-    db.flush()
+    await db.flush()
 
     for question_data in quiz_data["questions"]:
         db_question = QuestionModel(
@@ -59,7 +63,7 @@ async def generate_quiz(
             quiz_id=db_quiz.id,
         )
         db.add(db_question)
-        db.flush()
+        await db.flush()
 
         for answer_data in question_data.get("answers", []):
             db_answer = AnswerModel(
@@ -69,5 +73,5 @@ async def generate_quiz(
             )
             db.add(db_answer)
 
-    db.commit()
+    await db.commit()
     return {"quiz_id": db_quiz.id}

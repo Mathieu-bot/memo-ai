@@ -1,7 +1,9 @@
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, status
-from sqlalchemy.orm import Session
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from app.dependencies import get_db
 from app.exceptions import NotFoundError
@@ -13,63 +15,75 @@ router = APIRouter(prefix="/quizzes", tags=["quizzes"])
 
 
 @router.get("/", response_model=list[Quiz])
-def get_quizzes(
-    db: Annotated[Session, Depends(get_db)],
+async def get_quizzes(
+    db: Annotated[AsyncSession, Depends(get_db)],
     skip: int = 0,
     limit: int = 100,
 ):
-    return db.query(QuizModel).offset(skip).limit(limit).all()
+    result = await db.execute(select(QuizModel).offset(skip).limit(limit))
+    return result.scalars().all()
 
 
 @router.post("/", response_model=Quiz, status_code=status.HTTP_201_CREATED)
-def create_quiz(quiz: QuizCreate, db: Annotated[Session, Depends(get_db)]):
-    course = db.query(CourseModel).filter(CourseModel.id == quiz.course_id).first()
-    if course is None:
+async def create_quiz(quiz: QuizCreate, db: Annotated[AsyncSession, Depends(get_db)]):
+    course_result = await db.execute(
+        select(CourseModel).where(CourseModel.id == quiz.course_id)
+    )
+    if course_result.scalar_one_or_none() is None:
         raise NotFoundError("Course", quiz.course_id)
 
     db_quiz = QuizModel(**quiz.model_dump())
     db.add(db_quiz)
-    db.commit()
-    db.refresh(db_quiz)
+    await db.commit()
+    await db.refresh(db_quiz)
     return db_quiz
 
 
 @router.get("/{quiz_id}", response_model=QuizWithQuestions)
-def get_quiz(quiz_id: int, db: Annotated[Session, Depends(get_db)]):
-    quiz = db.query(QuizModel).filter(QuizModel.id == quiz_id).first()
+async def get_quiz(quiz_id: int, db: Annotated[AsyncSession, Depends(get_db)]):
+    result = await db.execute(
+        select(QuizModel)
+        .options(selectinload(QuizModel.questions))
+        .where(QuizModel.id == quiz_id)
+    )
+    quiz = result.scalar_one_or_none()
     if quiz is None:
         raise NotFoundError("Quiz", quiz_id)
     return quiz
 
 
 @router.put("/{quiz_id}", response_model=Quiz)
-def update_quiz(
-    quiz_id: int, quiz: QuizUpdate, db: Annotated[Session, Depends(get_db)]
+async def update_quiz(
+    quiz_id: int, quiz: QuizUpdate, db: Annotated[AsyncSession, Depends(get_db)]
 ):
-    db_quiz = db.query(QuizModel).filter(QuizModel.id == quiz_id).first()
+    result = await db.execute(select(QuizModel).where(QuizModel.id == quiz_id))
+    db_quiz = result.scalar_one_or_none()
     if db_quiz is None:
         raise NotFoundError("Quiz", quiz_id)
 
     if quiz.course_id is not None and quiz.course_id != db_quiz.course_id:
-        course = db.query(CourseModel).filter(CourseModel.id == quiz.course_id).first()
-        if course is None:
+        course_result = await db.execute(
+            select(CourseModel).where(CourseModel.id == quiz.course_id)
+        )
+        if course_result.scalar_one_or_none() is None:
             raise NotFoundError("Course", quiz.course_id)
 
     update_data = quiz.model_dump(exclude_unset=True)
     for key, value in update_data.items():
         setattr(db_quiz, key, value)
 
-    db.commit()
-    db.refresh(db_quiz)
+    await db.commit()
+    await db.refresh(db_quiz)
     return db_quiz
 
 
 @router.delete("/{quiz_id}", status_code=status.HTTP_204_NO_CONTENT)
-def delete_quiz(quiz_id: int, db: Annotated[Session, Depends(get_db)]):
-    db_quiz = db.query(QuizModel).filter(QuizModel.id == quiz_id).first()
+async def delete_quiz(quiz_id: int, db: Annotated[AsyncSession, Depends(get_db)]):
+    result = await db.execute(select(QuizModel).where(QuizModel.id == quiz_id))
+    db_quiz = result.scalar_one_or_none()
     if db_quiz is None:
         raise NotFoundError("Quiz", quiz_id)
 
-    db.delete(db_quiz)
-    db.commit()
+    await db.delete(db_quiz)
+    await db.commit()
     return None

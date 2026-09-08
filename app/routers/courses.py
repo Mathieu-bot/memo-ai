@@ -1,7 +1,8 @@
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, status
-from sqlalchemy.orm import Session
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.dependencies import get_db
 from app.exceptions import NotFoundError
@@ -12,36 +13,41 @@ router = APIRouter(prefix="/courses", tags=["courses"])
 
 
 @router.get("/", response_model=list[Course])
-def get_courses(
-    db: Annotated[Session, Depends(get_db)],
+async def get_courses(
+    db: Annotated[AsyncSession, Depends(get_db)],
     skip: int = 0,
     limit: int = 100,
 ):
-    return db.query(CourseModel).offset(skip).limit(limit).all()
+    result = await db.execute(select(CourseModel).offset(skip).limit(limit))
+    return result.scalars().all()
 
 
 @router.post("/", response_model=Course, status_code=status.HTTP_201_CREATED)
-def create_course(course: CourseCreate, db: Annotated[Session, Depends(get_db)]):
+async def create_course(
+    course: CourseCreate, db: Annotated[AsyncSession, Depends(get_db)]
+):
     db_course = CourseModel(**course.model_dump())
     db.add(db_course)
-    db.commit()
-    db.refresh(db_course)
+    await db.commit()
+    await db.refresh(db_course)
     return db_course
 
 
 @router.get("/{course_id}", response_model=Course)
-def get_course(course_id: int, db: Annotated[Session, Depends(get_db)]):
-    course = db.query(CourseModel).filter(CourseModel.id == course_id).first()
+async def get_course(course_id: int, db: Annotated[AsyncSession, Depends(get_db)]):
+    result = await db.execute(select(CourseModel).where(CourseModel.id == course_id))
+    course = result.scalar_one_or_none()
     if course is None:
         raise NotFoundError("Course", course_id)
     return course
 
 
 @router.put("/{course_id}", response_model=Course)
-def update_course(
-    course_id: int, course: CourseUpdate, db: Annotated[Session, Depends(get_db)]
+async def update_course(
+    course_id: int, course: CourseUpdate, db: Annotated[AsyncSession, Depends(get_db)]
 ):
-    db_course = db.query(CourseModel).filter(CourseModel.id == course_id).first()
+    result = await db.execute(select(CourseModel).where(CourseModel.id == course_id))
+    db_course = result.scalar_one_or_none()
     if db_course is None:
         raise NotFoundError("Course", course_id)
 
@@ -49,17 +55,18 @@ def update_course(
     for key, value in update_data.items():
         setattr(db_course, key, value)
 
-    db.commit()
-    db.refresh(db_course)
+    await db.commit()
+    await db.refresh(db_course)
     return db_course
 
 
 @router.delete("/{course_id}", status_code=status.HTTP_204_NO_CONTENT)
-def delete_course(course_id: int, db: Annotated[Session, Depends(get_db)]):
-    db_course = db.query(CourseModel).filter(CourseModel.id == course_id).first()
+async def delete_course(course_id: int, db: Annotated[AsyncSession, Depends(get_db)]):
+    result = await db.execute(select(CourseModel).where(CourseModel.id == course_id))
+    db_course = result.scalar_one_or_none()
     if db_course is None:
         raise NotFoundError("Course", course_id)
 
-    db.delete(db_course)
-    db.commit()
+    await db.delete(db_course)
+    await db.commit()
     return None

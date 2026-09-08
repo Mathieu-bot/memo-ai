@@ -9,7 +9,11 @@ from pydantic_settings import BaseSettings, NoDecode
 class Settings(BaseSettings):
     model_config = {"env_file": ".env", "env_file_encoding": "utf-8"}
 
-    DATABASE_URL: str = "sqlite:///./memoai.db"
+    DATABASE_URL: str = "sqlite+aiosqlite:///./memoai.db"
+
+    # Authentication
+    JWT_SECRET: str
+    ACCESS_TOKEN_EXPIRE_MINUTES: int = 30
 
     GEMINI_API_KEY: str = ""
     GEMINI_MODEL: str = "gemini-2.5-flash"
