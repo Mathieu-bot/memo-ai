@@ -8,6 +8,12 @@ WORKDIR /app
 # Non-root user
 RUN addgroup --system app && adduser --system --ingroup app app
 
+# ffmpeg/ffprobe are required for audio chunking during transcription
+# and for probing video duration on upload.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ffmpeg \
+    && rm -rf /var/lib/apt/lists/*
+
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
