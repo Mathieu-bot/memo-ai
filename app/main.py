@@ -10,12 +10,17 @@ from app.exceptions import (
     global_exception_handler,
     not_found_handler,
 )
+from app.logging_config import configure_logging
 from app.routers import ai, auth, courses, notes, quizzes, videos
+from app.utils.net import prefer_ipv4
 
 settings = get_settings()
 
 
 def create_app() -> FastAPI:
+    configure_logging()
+    if settings.NET_IPV4_ONLY:
+        prefer_ipv4()
     app = FastAPI(
         title="MemoAI API",
         description="Memorization assistant API for students",

@@ -20,7 +20,7 @@ MemoAI helps students memorize their lessons using AI to generate summaries, qui
 
 | Task | Provider | Model | Free Tier |
 |------|----------|-------|-----------|
-| Text generation (quizzes, summaries, flashcards) | Google Gemini | `gemini-2.5-flash` | 10 RPM, 1500 RPD |
+| Text generation (quizzes, summaries, flashcards) | Google Gemini | `gemini-3.6-flash` → falls back to `gemini-3.5-flash-lite` | 10 RPM, 1500 RPD (per model) |
 | Audio transcription | Groq | `whisper-large-v3-turbo` | ~8 hours of audio/day |
 | Video storage | Backblaze B2 | - | 10 GB free, no egress charges up to 3x monthly storage |
 
@@ -73,6 +73,10 @@ MemoAI helps students memorize their lessons using AI to generate summaries, qui
      Videos are streamed through URLs presigned for 1 hour; B2 charges no
      egress up to 3x the monthly average storage, so this MVP stays at
      **$0/month**.
+
+     If your host has no working IPv6 route (typical on some VMs), set
+     `NET_IPV4_ONLY=true` so boto3 uses IPv4; otherwise transfers to
+     dual-stack S3 endpoints can hang.
 
 5. Initialize the database
    ```bash

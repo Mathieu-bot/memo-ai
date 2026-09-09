@@ -42,7 +42,11 @@ def test_generate_quiz_invalid_course(auth_client):
     assert response.status_code == 404
 
 
-def test_generate_quiz_without_api_key(auth_client):
+def test_generate_quiz_without_api_key(auth_client, monkeypatch):
+    def _no_key_provider():
+        raise AIServiceError("GEMINI_API_KEY is not configured")
+
+    monkeypatch.setattr("app.routers.ai.get_ai_provider", _no_key_provider)
     course = auth_client.post("/courses/", json={"title": "Math"}).json()
     response = auth_client.post(f"/ai/generate-quiz/{course['id']}")
     assert response.status_code == 503
@@ -146,6 +150,7 @@ def test_get_ai_provider_requires_key(monkeypatch):
 class _WithKeySettings:
     GEMINI_API_KEY = "test-key"
     GEMINI_MODEL = "gemini-test-model"
+    GEMINI_MODELS = []
 
 
 def test_get_ai_provider_returns_provider(monkeypatch):
@@ -191,6 +196,28 @@ def test_gemini_retries_once_then_succeeds(monkeypatch):
 
 async def _noop():
     return None
+
+
+def test_gemini_falls_back_to_next_model_when_quota_exhausted(monkeypatch):
+    class QuotaError(RuntimeError):
+        code = 429
+        error = {"status": "RESOURCE_EXHAUSTED", "message": "quota"}
+
+    calls = []
+
+    class TwoTierModel:
+        async def generate_content(self, model, **kwargs):
+            calls.append(model)
+            if model == "m1":
+                raise QuotaError("quota exceeded")
+            return _Response(text="fallback-ok")
+
+    provider = GeminiProvider(api_key="k", model=["m1", "m2"])
+    provider.client = _FakeClient(TwoTierModel())
+    monkeypatch.setattr("app.services.ai.gemini.asyncio.sleep", lambda delay: _noop())
+    result = asyncio.run(provider.generate_text("hi"))
+    assert result == "fallback-ok"
+    assert calls == ["m1", "m2"]
 
 
 def test_gemini_retries_then_raises(monkeypatch):
