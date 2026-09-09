@@ -1,3 +1,19 @@
+import asyncio
+
+import pytest
+
+from app.exceptions import NotFoundError
+from app.routers.courses import (
+    create_course,
+    delete_course,
+    get_course,
+    get_courses,
+    update_course,
+)
+from app.schemas import CourseCreate, CourseUpdate
+from tests.conftest import TestingSessionLocal
+
+
 def test_list_courses_empty(auth_client):
     response = auth_client.get("/courses/")
     assert response.status_code == 200
@@ -59,3 +75,61 @@ def test_delete_course(auth_client):
 def test_delete_course_not_found(auth_client):
     response = auth_client.delete("/courses/999")
     assert response.status_code == 404
+
+
+# --- Direct handler-call tests ----------------------------------------------
+# These invoke the handlers in-process (no HTTP), which coverage measures fully.
+def _run(fn, *args, **kwargs):
+    async def _go():
+        async with TestingSessionLocal() as session:
+            return await fn(*args, db=session, **kwargs)
+
+    return asyncio.run(_go())
+
+
+def test_direct_create_course():
+    course = _run(create_course, CourseCreate(title="Math", description="Basics"))
+    assert course.title == "Math"
+    assert course.description == "Basics"
+    assert course.id is not None
+
+
+def test_direct_list_courses():
+    _run(create_course, CourseCreate(title="Math"))
+    courses = _run(get_courses)
+    assert [c.title for c in courses] == ["Math"]
+
+
+def test_direct_get_course():
+    created = _run(create_course, CourseCreate(title="Math"))
+    fetched = _run(get_course, created.id)
+    assert fetched.id == created.id
+
+
+def test_direct_get_course_not_found():
+    with pytest.raises(NotFoundError):
+        _run(get_course, 999)
+
+
+def test_direct_update_course():
+    created = _run(create_course, CourseCreate(title="Math"))
+    updated = _run(update_course, created.id, CourseUpdate(title="Advanced"))
+    assert updated.title == "Advanced"
+    assert updated.description is None
+
+
+def test_direct_update_course_not_found():
+    with pytest.raises(NotFoundError):
+        _run(update_course, 999, CourseUpdate(title="X"))
+
+
+def test_direct_delete_course():
+    created = _run(create_course, CourseCreate(title="Math"))
+    assert _run(delete_course, created.id) is None
+    with pytest.raises(NotFoundError):
+        _run(get_course, created.id)
+
+
+def test_direct_delete_course_not_found():
+    with pytest.raises(NotFoundError):
+        _run(delete_course, 999)
