@@ -12,7 +12,8 @@ MemoAI helps students memorize their lessons using AI to generate summaries, qui
 - **Course Notes**: Add your notes and get AI-generated summaries
 - **Quiz Generation**: Create quizzes to test your knowledge
 - **Flashcards**: Generate flashcards for active recall
-- **Video Upload**: Store your course videos in the cloud (Cloudinary)
+- **Video Upload**: Store your course videos in Backblaze B2 (private bucket
+  with presigned URLs, or local disk as a no-config fallback)
 - **Video Transcription**: Get transcriptions of your videos
 
 ## AI Stack ($0 budget)
@@ -21,7 +22,7 @@ MemoAI helps students memorize their lessons using AI to generate summaries, qui
 |------|----------|-------|-----------|
 | Text generation (quizzes, summaries, flashcards) | Google Gemini | `gemini-2.5-flash` | 10 RPM, 1500 RPD |
 | Audio transcription | Groq | `whisper-large-v3-turbo` | ~8 hours of audio/day |
-| Video storage | Cloudinary | - | 25 GB, 25 credits/month |
+| Video storage | Backblaze B2 | - | 10 GB free, no egress charges up to 3x monthly storage |
 
 ## Installation
 
@@ -61,7 +62,17 @@ MemoAI helps students memorize their lessons using AI to generate summaries, qui
 5. Get free API keys
    - **Gemini**: https://aistudio.google.com (generate `GEMINI_API_KEY`)
    - **Groq**: https://console.groq.com (generate `GROQ_API_KEY`)
-   - **Cloudinary**: https://cloudinary.com (free account)
+   - **Backblaze B2** (optional): create a private bucket + an application key
+     with "Read & Write" access to that bucket, then set `B2_KEY_ID`,
+     `B2_APPLICATION_KEY`, `B2_BUCKET` and (optionally) `B2_ENDPOINT` in `.env`.
+     Without B2 credentials the app falls back to local disk storage
+     (`STORAGE_DIR`, defaults to `data/uploads`).
+
+     Bucket API URLs allow listing the endpoints (`Key ID`, `applicationKeyId`,
+     and bucket name), then set `B2_ENDPOINT` accordingly (e.g. on C128).
+     Videos are streamed through URLs presigned for 1 hour; B2 charges no
+     egress up to 3x the monthly average storage, so this MVP stays at
+     **$0/month**.
 
 5. Initialize the database
    ```bash
@@ -159,7 +170,7 @@ pytest tests/ -v
 - **Backend**: FastAPI, SQLAlchemy 2.0 (async), fastapi-users (auth), PyJWT
 - **Database**: SQLite via aiosqlite by default (easily switchable to PostgreSQL via `DATABASE_URL`)
 - **AI**: Google Gemini (text), Groq Whisper (transcription)
-- **Video storage**: Cloudinary
+- **Video storage**: Backblaze B2 (private bucket, presigned URLs) with local-disk fallback
 - **Validation**: Pydantic v2
 - **Linting & formatting**: Ruff
 
@@ -185,7 +196,10 @@ memoai/
 │       │   ├── summary_service.py
 │       │   ├── flashcard_service.py
 │       │   └── transcription_service.py  # Groq Whisper + chunking
-│       ├── cloudinary_service.py
+│       ├── storage/          # Video storage abstraction
+│       │   ├── base.py           # StorageService interface
+│       │   ├── backblaze.py      # B2 implementation (boto3, presigned URLs)
+│       │   └── local.py          # Local-disk fallback
 │       └── video_service.py
 ├── tests/                    # pytest suite
 ├── .env.example
@@ -199,6 +213,12 @@ memoai/
   models handle persistence, schemas handle validation
 - **Abstract AI provider**: swap Gemini for another provider by implementing the
   `AIProvider` interface
+- **Abstract storage service**: swap B2 for another backend by implementing the
+  `StorageService` interface; local disk is used automatically when no B2
+  credentials are configured
+- **Grounded generation**: summaries, quizzes and flashcards are generated from
+  the user's own content (course notes / transcript), with a 0 temperature and
+  hallucinations reduced
 - **Graceful degradation**: if no AI key is configured, notes still save (summary
   stays null) and AI endpoints return clean `503` responses
 - **Retry with exponential backoff**: transient AI rate limits are handled
@@ -229,6 +249,7 @@ memoai/
 | POST | `/notes/{id}/generate-flashcards` | Generate AI flashcards |
 | GET/POST | `/videos/` | List / upload videos (multipart) |
 | GET/PUT/DELETE | `/videos/{id}` | Get / update / delete a video |
+| GET | `/videos/{id}/file` | Stream video bytes (presigned B2 URL or local file) |
 | POST | `/videos/{id}/regenerate-transcript` | Regenerate AI transcript |
 | POST | `/ai/generate-quiz/{course_id}` | Generate AI quiz for a course |
 
