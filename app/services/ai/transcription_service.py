@@ -28,6 +28,18 @@ class TranscriptionService:
             if os.path.exists(temp_path):
                 os.unlink(temp_path)
 
+    def transcribe_bytes(self, data: bytes, suffix: str = ".mp4") -> str:
+        """Transcribe content already in memory (no download round-trip)."""
+        temp_path: str | None = None
+        try:
+            with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as temp_file:
+                temp_file.write(data)
+                temp_path = temp_file.name
+            return self.transcribe_path(temp_path)
+        finally:
+            if temp_path and os.path.exists(temp_path):
+                os.unlink(temp_path)
+
     def _download(self, url: str) -> str:
         tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".mp4")
         tmp_path = tmp.name

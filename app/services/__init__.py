@@ -8,11 +8,15 @@ from app.services.ai import (
     get_ai_provider,
     get_transcription_service,
 )
-from app.services.cloudinary_service import CloudinaryService
+from app.services.storage import (
+    B2StorageService,
+    LocalStorageService,
+    StorageService,
+    get_storage_service,
+)
 from app.services.video_service import VideoService
 
 __all__ = [
-    "CloudinaryService",
     "VideoService",
     "AIProvider",
     "GeminiProvider",
@@ -22,4 +26,8 @@ __all__ = [
     "FlashcardService",
     "TranscriptionService",
     "get_transcription_service",
+    "StorageService",
+    "B2StorageService",
+    "LocalStorageService",
+    "get_storage_service",
 ]

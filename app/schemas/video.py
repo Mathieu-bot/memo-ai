@@ -27,12 +27,13 @@ class VideoUpdate(BaseModel):
 
 class VideoInDBBase(VideoBase):
     id: int
-    cloudinary_public_id: str
-    cloudinary_url: str
+    storage_key: str
     duration: int | None = None
     transcript: str | None = None
     created_at: datetime
     is_synchronized: bool
+    # Computed at request time: presigned URL with B2, None with local storage.
+    file_url: str | None = None
     model_config = ConfigDict(from_attributes=True)
 
 

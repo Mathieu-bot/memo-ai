@@ -9,8 +9,9 @@ services:
     env_file:
       - .env
     environment:
-      # Absolute path inside the container; volume below persists it.
+      # Absolute paths inside the container; volume below persists them.
       DATABASE_URL: sqlite+aiosqlite:////data/memoai.db
+      STORAGE_DIR: /data/uploads
     volumes:
       - ./data:/data
     restart: unless-stopped

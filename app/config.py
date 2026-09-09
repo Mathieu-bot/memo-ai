@@ -20,9 +20,13 @@ class Settings(BaseSettings):
 
     GROQ_API_KEY: str = ""
 
-    CLOUDINARY_CLOUD_NAME: str = ""
-    CLOUDINARY_API_KEY: str = ""
-    CLOUDINARY_API_SECRET: str = ""
+    # Object storage (Backblaze B2). Leave the keys empty to use local
+    # fallback storage (data/uploads) for development and tests.
+    B2_ENDPOINT_URL: str = "https://s3.us-west-004.backblazeb2.com"
+    B2_KEY_ID: str = ""
+    B2_APPLICATION_KEY: str = ""
+    B2_BUCKET_NAME: str = ""
+    STORAGE_DIR: str = "data/uploads"
 
     CORS_ORIGINS: Annotated[list[str], NoDecode] = ["*"]
 
