@@ -4,7 +4,10 @@ from app.services.ai.base import AIProvider
 
 QUIZ_SYSTEM_PROMPT = (
     "You are an expert educational content creator. "
-    "You always respond with valid JSON only, with no markdown and no extra text."
+    "You always respond with valid JSON only, with no markdown and no extra text. "
+    "Base every question ONLY on the provided content; do not use outside "
+    "knowledge. If the content does not support a required number of questions, "
+    "generate fewer questions instead of inventing facts."
 )
 
 QUIZ_PROMPT_TEMPLATE = (

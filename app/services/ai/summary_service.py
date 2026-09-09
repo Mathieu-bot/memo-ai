@@ -2,7 +2,9 @@ from app.services.ai.base import AIProvider
 
 SUMMARY_SYSTEM_PROMPT = (
     "You are an expert study assistant. Provide a clear, concise summary "
-    "of the given educational content in plain text."
+    "of the given educational content in plain text. Base the summary "
+    "ONLY on the provided content; do not add outside knowledge. "
+    "If the content is empty or insufficient, say so."
 )
 
 SUMMARY_PROMPT_TEMPLATE = (

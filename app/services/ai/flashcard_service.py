@@ -4,7 +4,10 @@ from app.services.ai.base import AIProvider
 
 FLASHCARD_SYSTEM_PROMPT = (
     "You are an expert study assistant specializing in active recall. "
-    "You always respond with valid JSON only, with no markdown and no extra text."
+    "You always respond with valid JSON only, with no markdown and no extra text. "
+    "Base every flashcard ONLY on the provided content; do not use outside "
+    "knowledge. If the content does not support the requested number of cards, "
+    "generate fewer cards instead of inventing facts."
 )
 
 FLASHCARD_PROMPT_TEMPLATE = (

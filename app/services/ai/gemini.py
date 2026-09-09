@@ -14,6 +14,8 @@ logger = logging.getLogger(__name__)
 
 MAX_RETRIES = 3
 RETRY_DELAY_SECONDS = 1.0
+# Grounding: deterministic generation anchored strictly on the provided content.
+TEMPERATURE = 0.0
 
 
 class GeminiProvider(AIProvider):
@@ -28,7 +30,7 @@ class GeminiProvider(AIProvider):
             contents=prompt,
             config=GenerateContentConfig(
                 system_instruction=system_prompt or None,
-                temperature=0.7,
+                temperature=TEMPERATURE,
             ),
         )
         return response.text
@@ -42,7 +44,7 @@ class GeminiProvider(AIProvider):
             contents=prompt,
             config=GenerateContentConfig(
                 system_instruction=system_prompt or None,
-                temperature=0.7,
+                temperature=TEMPERATURE,
                 response_mime_type="application/json",
             ),
         )
