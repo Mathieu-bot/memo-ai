@@ -12,6 +12,11 @@ logger = logging.getLogger(__name__)
 
 PRESIGNED_URL_EXPIRATION_SECONDS = 3600
 
+# Reading a large object can be interrupted by a transient connection
+# drop (truncated response stream), so retry before giving up.
+READ_ATTEMPTS = 3
+READ_RETRY_BASE_DELAY_SECONDS = 0.3
+
 
 class B2StorageService(StorageService):
     """Stores files in a private Backblaze B2 bucket.
@@ -35,7 +40,11 @@ class B2StorageService(StorageService):
             aws_access_key_id=key_id,
             aws_secret_access_key=application_key,
             region_name=region,
-            config=BotoConfig(signature_version="s3v4"),
+            config=BotoConfig(
+                signature_version="s3v4",
+                connect_timeout=30,
+                read_timeout=180,
+            ),
         )
         self.bucket = bucket
 
@@ -62,11 +71,24 @@ class B2StorageService(StorageService):
             raise UploadError("Failed to delete video from storage") from exc
 
     async def read(self, key: str) -> bytes:
-        try:
-            return await asyncio.to_thread(self._get_object, key)
-        except (ClientError, BotoCoreError) as exc:
-            logger.error("B2 read failed for %s: %s", key, exc)
-            raise UploadError("Failed to read video from storage") from exc
+        for attempt in range(READ_ATTEMPTS):
+            try:
+                return await asyncio.to_thread(self._get_object, key)
+            except (ClientError, BotoCoreError) as exc:
+                if attempt < READ_ATTEMPTS - 1:
+                    delay = READ_RETRY_BASE_DELAY_SECONDS * (2**attempt)
+                    logger.warning(
+                        "B2 read failed for %s (attempt %d/%d), retrying in %.1fs: %s",
+                        key,
+                        attempt + 1,
+                        READ_ATTEMPTS,
+                        delay,
+                        exc,
+                    )
+                    await asyncio.sleep(delay)
+                    continue
+                logger.error("B2 read failed for %s: %s", key, exc)
+                raise UploadError("Failed to read video from storage") from exc
 
     def _get_object(self, key: str) -> bytes:
         response = self.client.get_object(Bucket=self.bucket, Key=key)

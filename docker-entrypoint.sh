@@ -6,7 +6,7 @@ set -e
 # is created by SQLite/init_db on demand.
 mkdir -p /data/uploads
 
-# Create tables and seed initial data on first run (idempotent).
+# Create tables on first run (idempotent).
 python init_db.py
 
 exec "$@"

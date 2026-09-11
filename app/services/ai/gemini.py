@@ -19,14 +19,17 @@ TEMPERATURE = 0.0
 
 
 class GeminiProvider(AIProvider):
-    def __init__(self, api_key: str, model: str):
+    def __init__(self, api_key: str, model: str | list[str]):
         self.client = genai.Client(api_key=api_key)
-        self.model = model
+        if isinstance(model, str):
+            self.models = [model]
+        else:
+            self.models = list(model) or ["gemini-3.6-flash"]
+        self.model = self.models[0]
 
     async def generate_text(self, prompt: str, system_prompt: str = "") -> str:
         response = await self._call_with_retry(
             self.client.aio.models.generate_content,
-            model=self.model,
             contents=prompt,
             config=GenerateContentConfig(
                 system_instruction=system_prompt or None,
@@ -40,7 +43,6 @@ class GeminiProvider(AIProvider):
     ) -> dict[str, Any]:
         response = await self._call_with_retry(
             self.client.aio.models.generate_content,
-            model=self.model,
             contents=prompt,
             config=GenerateContentConfig(
                 system_instruction=system_prompt or None,
@@ -54,24 +56,45 @@ class GeminiProvider(AIProvider):
             logger.error("Failed to parse structured JSON from model: %s", exc)
             raise AIServiceError("AI returned invalid JSON") from exc
 
+    @staticmethod
+    def _is_model_unavailable(exc: Exception) -> bool:
+        """Quota exhaustion (429 RESOURCE_EXHAUSTED) and retired models (404)
+        are not cured by retrying the same model, so a fallback is needed."""
+        code = getattr(exc, "code", None)
+        if code == 404:
+            return True
+        if code == 429:
+            error = getattr(exc, "error", None) or {}
+            return error.get("status") == "RESOURCE_EXHAUSTED"
+        return False
+
     async def _call_with_retry(self, func, *args, **kwargs) -> Any:
         last_error: Exception | None = None
-        for attempt in range(MAX_RETRIES):
-            try:
-                return await func(*args, **kwargs)
-            except Exception as exc:
-                last_error = exc
-                if attempt < MAX_RETRIES - 1:
-                    delay = RETRY_DELAY_SECONDS * (2**attempt)
-                    logger.warning(
-                        "AI call failed (attempt %d/%d): %s. Retrying in %.1fs",
-                        attempt + 1,
-                        MAX_RETRIES,
-                        exc,
-                        delay,
-                    )
-                    await asyncio.sleep(delay)
-        logger.error("AI call failed after %d attempts: %s", MAX_RETRIES, last_error)
+        for model in self.models:
+            for attempt in range(MAX_RETRIES):
+                try:
+                    kwargs["model"] = model
+                    return await func(*args, **kwargs)
+                except Exception as exc:
+                    last_error = exc
+                    if self._is_model_unavailable(exc):
+                        logger.warning(
+                            "Model %s unavailable (%s); switching to next model",
+                            model,
+                            exc,
+                        )
+                        break
+                    if attempt < MAX_RETRIES - 1:
+                        delay = RETRY_DELAY_SECONDS * (2**attempt)
+                        logger.warning(
+                            "AI call failed (attempt %d/%d): %s. Retrying in %.1fs",
+                            attempt + 1,
+                            MAX_RETRIES,
+                            exc,
+                            delay,
+                        )
+                        await asyncio.sleep(delay)
+        logger.error("AI call failed across all models: %s", last_error)
         raise AIServiceError from last_error
 
 
@@ -81,5 +104,5 @@ def get_ai_provider() -> AIProvider:
         raise AIServiceError("GEMINI_API_KEY is not configured")
     return GeminiProvider(
         api_key=settings.GEMINI_API_KEY,
-        model=settings.GEMINI_MODEL,
+        model=settings.GEMINI_MODELS or [settings.GEMINI_MODEL],
     )

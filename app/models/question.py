@@ -1,4 +1,6 @@
-from sqlalchemy import Column, ForeignKey, Integer, Text
+from uuid import uuid4
+
+from sqlalchemy import Column, ForeignKey, Text, Uuid
 from sqlalchemy.orm import relationship
 
 from app.database import Base
@@ -7,11 +9,11 @@ from app.database import Base
 class Question(Base):
     __tablename__ = "questions"
 
-    id = Column(Integer, primary_key=True, index=True)
+    id = Column(Uuid, primary_key=True, default=uuid4, index=True)
     text = Column(Text, nullable=False)
     explanation = Column(Text, nullable=True)
     quiz_id = Column(
-        Integer, ForeignKey("quizzes.id", ondelete="CASCADE"), nullable=False
+        Uuid, ForeignKey("quizzes.id", ondelete="CASCADE"), nullable=False, index=True
     )
 
     quiz = relationship("Quiz", back_populates="questions")

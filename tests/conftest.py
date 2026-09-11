@@ -1,6 +1,7 @@
 import asyncio
 import os
 import tempfile
+from uuid import UUID, uuid4
 
 os.environ.setdefault("JWT_SECRET", "test-secret")
 
@@ -12,6 +13,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 import app.models  # noqa: F401
 from app.database import Base
 from app.dependencies import get_db
+from app.models import User
 
 _tmp_db = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
 _tmp_db.close()
@@ -55,12 +57,10 @@ def auth_client(client):
         },
     )
     assert response.status_code == 201, response.text
-    user_id = response.json()["id"]
+    user_id = UUID(response.json()["id"])
 
     async def _verify():
         from sqlalchemy import update
-
-        from app.models import User
 
         async with TestingSessionLocal() as session:
             await session.execute(
@@ -79,6 +79,28 @@ def auth_client(client):
     return client
 
 
+def _db_user(email="direct@example.com", username="direct") -> User:
+    """Insert a verified user directly (for in-process handler calls)."""
+
+    async def _go():
+        async with TestingSessionLocal() as session:
+            user = User(
+                id=uuid4(),
+                email=email,
+                username=username,
+                hashed_password="not-used",
+                is_active=True,
+                is_verified=True,
+                is_superuser=False,
+            )
+            session.add(user)
+            await session.commit()
+            await session.refresh(user)
+            return user
+
+    return asyncio.run(_go())
+
+
 @pytest.fixture(autouse=True)
 def clean_db():
     yield
@@ -90,6 +112,7 @@ def clean_db():
             await session.execute(text("DELETE FROM quizzes"))
             await session.execute(text("DELETE FROM videos"))
             await session.execute(text("DELETE FROM notes"))
+            await session.execute(text("DELETE FROM course_members"))
             await session.execute(text("DELETE FROM courses"))
             await session.execute(text("DELETE FROM users"))
             await session.commit()

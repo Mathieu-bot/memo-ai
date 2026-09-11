@@ -16,7 +16,14 @@ class Settings(BaseSettings):
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 30
 
     GEMINI_API_KEY: str = ""
-    GEMINI_MODEL: str = "gemini-2.5-flash"
+    GEMINI_MODEL: str = "gemini-3.6-flash"
+    # Ordered fallback chain across models. Gemini free tier quotas are
+    # enforced per model per day, so the provider switches to the next
+    # model when one hits its quota or is retired.
+    GEMINI_MODELS: Annotated[list[str], NoDecode] = [
+        "gemini-3.6-flash",
+        "gemini-3.5-flash-lite",
+    ]
 
     GROQ_API_KEY: str = ""
 
@@ -33,13 +40,18 @@ class Settings(BaseSettings):
     ENVIRONMENT: str = "development"
     PORT: int = 8000
 
-    @field_validator("CORS_ORIGINS", mode="before")
+    # Force IPv4 for all outbound connections. Needed on dev hosts whose
+    # IPv6 route is broken: boto3/httpx would otherwise pick IPv6 first and
+    # hang on dual-stack endpoints (e.g. Backblaze B2).
+    NET_IPV4_ONLY: bool = False
+
+    @field_validator("CORS_ORIGINS", "GEMINI_MODELS", mode="before")
     @classmethod
-    def parse_cors_origins(cls, value):
+    def parse_csv_or_json_list(cls, value):
         if isinstance(value, str):
             if value.startswith("["):
                 return json.loads(value)
-            return [origin.strip() for origin in value.split(",") if origin.strip()]
+            return [item.strip() for item in value.split(",") if item.strip()]
         return value
 
 

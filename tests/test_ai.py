@@ -1,4 +1,5 @@
 import asyncio
+from uuid import UUID, uuid4
 
 import pytest
 from fastapi import HTTPException
@@ -13,7 +14,9 @@ from app.services.ai import (
     SummaryService,
 )
 from app.services.ai.gemini import GeminiProvider, get_ai_provider
-from tests.conftest import TestingSessionLocal
+from tests.conftest import TestingSessionLocal, _db_user
+
+MISSING_ID = "00000000-0000-0000-0000-000000000000"
 
 
 class RecordingProvider:
@@ -38,11 +41,15 @@ class RecordingProvider:
 
 
 def test_generate_quiz_invalid_course(auth_client):
-    response = auth_client.post("/ai/generate-quiz/999")
+    response = auth_client.post(f"/ai/generate-quiz/{MISSING_ID}")
     assert response.status_code == 404
 
 
-def test_generate_quiz_without_api_key(auth_client):
+def test_generate_quiz_without_api_key(auth_client, monkeypatch):
+    def _no_key_provider():
+        raise AIServiceError("GEMINI_API_KEY is not configured")
+
+    monkeypatch.setattr("app.routers.ai.get_ai_provider", _no_key_provider)
     course = auth_client.post("/courses/", json={"title": "Math"}).json()
     response = auth_client.post(f"/ai/generate-quiz/{course['id']}")
     assert response.status_code == 503
@@ -146,6 +153,7 @@ def test_get_ai_provider_requires_key(monkeypatch):
 class _WithKeySettings:
     GEMINI_API_KEY = "test-key"
     GEMINI_MODEL = "gemini-test-model"
+    GEMINI_MODELS = []
 
 
 def test_get_ai_provider_returns_provider(monkeypatch):
@@ -191,6 +199,28 @@ def test_gemini_retries_once_then_succeeds(monkeypatch):
 
 async def _noop():
     return None
+
+
+def test_gemini_falls_back_to_next_model_when_quota_exhausted(monkeypatch):
+    class QuotaError(RuntimeError):
+        code = 429
+        error = {"status": "RESOURCE_EXHAUSTED", "message": "quota"}
+
+    calls = []
+
+    class TwoTierModel:
+        async def generate_content(self, model, **kwargs):
+            calls.append(model)
+            if model == "m1":
+                raise QuotaError("quota exceeded")
+            return _Response(text="fallback-ok")
+
+    provider = GeminiProvider(api_key="k", model=["m1", "m2"])
+    provider.client = _FakeClient(TwoTierModel())
+    monkeypatch.setattr("app.services.ai.gemini.asyncio.sleep", lambda delay: _noop())
+    result = asyncio.run(provider.generate_text("hi"))
+    assert result == "fallback-ok"
+    assert calls == ["m1", "m2"]
 
 
 def test_gemini_retries_then_raises(monkeypatch):
@@ -256,35 +286,38 @@ def _run(fn, *args, **kwargs):
     return asyncio.run(_go())
 
 
-def _create_course_direct() -> int:
-    return _run(create_course, CourseCreate(title="Math")).id
+def _create_course_direct(user):
+    return _run(create_course, CourseCreate(title="Math"), user=user).id
 
 
 def test_direct_generate_quiz_success(monkeypatch):
-    course_id = _create_course_direct()
+    user = _db_user()
+    course_id = _create_course_direct(user)
     monkeypatch.setattr("app.routers.ai.get_ai_provider", lambda: _QuizProvider())
-    result = _run(generate_quiz, course_id, num_questions=3)
-    assert isinstance(result["quiz_id"], int)
+    result = _run(generate_quiz, course_id, user=user, num_questions=3)
+    assert isinstance(result["quiz_id"], UUID)
 
 
 def test_direct_generate_quiz_invalid_course():
     with pytest.raises(NotFoundError):
-        _run(generate_quiz, 999)
+        _run(generate_quiz, uuid4(), user=_db_user())
 
 
 def test_direct_generate_quiz_invalid_structure(monkeypatch):
-    course_id = _create_course_direct()
+    user = _db_user()
+    course_id = _create_course_direct(user)
     monkeypatch.setattr("app.routers.ai.get_ai_provider", lambda: _EmptyQuizProvider())
     with pytest.raises(HTTPException) as exc_info:
-        _run(generate_quiz, course_id)
+        _run(generate_quiz, course_id, user=user)
     assert exc_info.value.status_code == 502
 
 
 def test_direct_generate_quiz_ai_failure(monkeypatch):
-    course_id = _create_course_direct()
+    user = _db_user()
+    course_id = _create_course_direct(user)
     monkeypatch.setattr(
         "app.routers.ai.get_ai_provider", lambda: _FailingQuizProvider()
     )
     with pytest.raises(HTTPException) as exc_info:
-        _run(generate_quiz, course_id)
+        _run(generate_quiz, course_id, user=user)
     assert exc_info.value.status_code == 503

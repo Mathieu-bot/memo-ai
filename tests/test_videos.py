@@ -1,5 +1,6 @@
 import asyncio
 import subprocess
+from uuid import uuid4
 
 import pytest
 from fastapi import HTTPException
@@ -20,7 +21,9 @@ from app.routers.videos import (
 from app.schemas import CourseCreate, VideoUpdate
 from app.services.storage import LocalStorageService
 from app.services.video_service import VideoService
-from tests.conftest import TestingSessionLocal
+from tests.conftest import TestingSessionLocal, _db_user
+
+MISSING_ID = "00000000-0000-0000-0000-000000000000"
 
 
 def _create_course(auth_client) -> dict:
@@ -78,7 +81,7 @@ def test_video_upload_rejects_non_video(auth_client):
 def test_video_upload_invalid_course(auth_client):
     response = auth_client.post(
         "/videos/upload",
-        data={"title": "Vid", "course_id": "999"},
+        data={"title": "Vid", "course_id": MISSING_ID},
         files={"file": ("video.mp4", b"fake", "video/mp4")},
     )
     assert response.status_code == 404
@@ -91,7 +94,7 @@ def test_list_videos_empty(auth_client):
 
 
 def test_get_video_not_found(auth_client):
-    response = auth_client.get("/videos/999")
+    response = auth_client.get(f"/videos/{MISSING_ID}")
     assert response.status_code == 404
 
 
@@ -335,8 +338,9 @@ def test_probe_duration_failure_returns_none(monkeypatch):
 def test_build_storage_key_format():
     import app.routers.videos as videos_router
 
-    key = videos_router._build_storage_key(course_id=7)
-    assert key.startswith("course_videos/7/")
+    course_id = uuid4()
+    key = videos_router._build_storage_key(course_id=course_id)
+    assert key.startswith(f"course_videos/{course_id}/")
     assert key.endswith(".mp4")
 
 
@@ -346,9 +350,9 @@ def _make_video_model():
     from app.models import Video as VideoModel
 
     return VideoModel(
-        id=1,
+        id=uuid4(),
         title="Intro",
-        course_id=7,
+        course_id=uuid4(),
         storage_key="course_videos/7/x.mp4",
         duration=3,
         transcript=None,
@@ -402,11 +406,11 @@ def _run(fn, *args, **kwargs):
     return asyncio.run(_go())
 
 
-def _create_course_direct() -> int:
-    return _run(create_course, CourseCreate(title="Math")).id
+def _create_course_direct(user):
+    return _run(create_course, CourseCreate(title="Math"), user=user).id
 
 
-def _create_video_direct(course_id: int, storage_key="course_videos/7/x.mp4") -> int:
+def _create_video_direct(user, course_id, storage_key="course_videos/7/x.mp4"):
     async def _go():
         async with TestingSessionLocal() as session:
             video = VideoModel(
@@ -421,100 +425,111 @@ def _create_video_direct(course_id: int, storage_key="course_videos/7/x.mp4") ->
 
 
 def test_direct_list_videos_with_filters(monkeypatch):
-    course_id = _create_course_direct()
-    video_id = _create_video_direct(course_id)
+    user = _db_user()
+    course_id = _create_course_direct(user)
+    video_id = _create_video_direct(user, course_id)
     monkeypatch.setattr(
         videos_router, "get_storage_service", lambda: FakeRemoteStorage()
     )
-    videos = _run(get_videos, title="Intro")
+    videos = _run(get_videos, user=user, title="Intro")
     assert len(videos) == 1
     assert videos[0].file_url is not None
-    assert [v.id for v in _run(get_videos, course_id=course_id)] == [video_id]
+    assert [v.id for v in _run(get_videos, user=user, course_id=course_id)] == [
+        video_id
+    ]
 
 
 def test_direct_get_video(monkeypatch):
-    video_id = _create_video_direct(_create_course_direct())
+    user = _db_user()
+    video_id = _create_video_direct(user, _create_course_direct(user))
     monkeypatch.setattr(
         videos_router, "get_storage_service", lambda: FakeRemoteStorage()
     )
-    result = _run(get_video, video_id)
+    result = _run(get_video, video_id, user=user)
     assert result.id == video_id
     assert result.file_url is not None
 
 
 def test_direct_get_video_not_found():
     with pytest.raises(NotFoundError):
-        _run(get_video, 999)
+        _run(get_video, uuid4(), user=_db_user())
 
 
 def test_direct_update_video_title(monkeypatch):
-    video_id = _create_video_direct(_create_course_direct())
+    user = _db_user()
+    video_id = _create_video_direct(user, _create_course_direct(user))
     monkeypatch.setattr(
         videos_router, "get_storage_service", lambda: FakeRemoteStorage()
     )
-    updated = _run(update_video, video_id, VideoUpdate(title="Renamed"))
+    updated = _run(update_video, video_id, VideoUpdate(title="Renamed"), user=user)
     assert updated.title == "Renamed"
 
 
 def test_direct_update_video_change_course(monkeypatch):
-    course_a = _create_course_direct()
-    course_b = _create_course_direct()
-    video_id = _create_video_direct(course_a)
+    user = _db_user()
+    course_a = _create_course_direct(user)
+    course_b = _create_course_direct(user)
+    video_id = _create_video_direct(user, course_a)
     monkeypatch.setattr(
         videos_router, "get_storage_service", lambda: FakeRemoteStorage()
     )
-    updated = _run(update_video, video_id, VideoUpdate(course_id=course_b))
+    updated = _run(update_video, video_id, VideoUpdate(course_id=course_b), user=user)
     assert updated.course_id == course_b
 
 
 def test_direct_update_video_invalid_course():
-    video_id = _create_video_direct(_create_course_direct())
+    user = _db_user()
+    video_id = _create_video_direct(user, _create_course_direct(user))
     with pytest.raises(NotFoundError):
-        _run(update_video, video_id, VideoUpdate(course_id=999))
+        _run(update_video, video_id, VideoUpdate(course_id=uuid4()), user=user)
 
 
 def test_direct_update_video_not_found():
     with pytest.raises(NotFoundError):
-        _run(update_video, 999, VideoUpdate(title="X"))
+        _run(update_video, uuid4(), VideoUpdate(title="X"), user=_db_user())
 
 
 def test_direct_get_video_file_redirects(monkeypatch):
-    video_id = _create_video_direct(_create_course_direct())
+    user = _db_user()
+    video_id = _create_video_direct(user, _create_course_direct(user))
     monkeypatch.setattr(
         videos_router, "get_storage_service", lambda: FakeRemoteStorage()
     )
-    response = _run(get_video_file, video_id)
+    response = _run(get_video_file, video_id, user=user)
     assert isinstance(response, RedirectResponse)
     assert response.status_code == 307
 
 
 def test_direct_get_video_file_local(monkeypatch, tmp_path):
+    user = _db_user()
     storage_key = "course_videos/7/local.mp4"
-    video_id = _create_video_direct(_create_course_direct(), storage_key=storage_key)
+    video_id = _create_video_direct(user, _create_course_direct(user), storage_key)
     storage = LocalStorageService(base_dir=tmp_path)
     asyncio.run(storage.save(storage_key, b"content", "video/mp4"))
     monkeypatch.setattr(videos_router, "get_storage_service", lambda: storage)
-    response = _run(get_video_file, video_id)
+    response = _run(get_video_file, video_id, user=user)
     assert isinstance(response, FileResponse)
     assert response.media_type == "video/mp4"
 
 
 def test_direct_get_video_file_missing(monkeypatch):
-    video_id = _create_video_direct(_create_course_direct())
+    user = _db_user()
+    video_id = _create_video_direct(user, _create_course_direct(user))
     monkeypatch.setattr(videos_router, "get_storage_service", lambda: FakeStorage())
     with pytest.raises(HTTPException) as exc_info:
-        _run(get_video_file, video_id)
+        _run(get_video_file, video_id, user=user)
     assert exc_info.value.status_code == 404
 
 
 def test_direct_delete_video(monkeypatch):
-    course_id = _create_course_direct()
+    user = _db_user()
+    course_id = _create_course_direct(user)
     storage_key = "course_videos/7/del.mp4"
-    video_id = _create_video_direct(course_id, storage_key=storage_key)
+    video_id = _create_video_direct(user, course_id, storage_key=storage_key)
     storage = FakeStorage()
     storage.saved[storage_key] = b"content"
     monkeypatch.setattr(videos_router, "get_storage_service", lambda: storage)
-    assert _run(delete_video, video_id) is None
+    assert _run(delete_video, video_id, user=user) is None
 
 
 class _DeleteErrorStorage(FakeStorage):
@@ -523,19 +538,21 @@ class _DeleteErrorStorage(FakeStorage):
 
 
 def test_direct_delete_video_storage_error(monkeypatch):
-    video_id = _create_video_direct(_create_course_direct())
+    user = _db_user()
+    video_id = _create_video_direct(user, _create_course_direct(user))
     monkeypatch.setattr(
         videos_router, "get_storage_service", lambda: _DeleteErrorStorage()
     )
     with pytest.raises(HTTPException) as exc_info:
-        _run(delete_video, video_id)
+        _run(delete_video, video_id, user=user)
     assert exc_info.value.status_code == 502
 
 
 def test_direct_regenerate_transcript(monkeypatch):
-    course_id = _create_course_direct()
+    user = _db_user()
+    course_id = _create_course_direct(user)
     storage_key = "course_videos/7/regen.mp4"
-    video_id = _create_video_direct(course_id, storage_key=storage_key)
+    video_id = _create_video_direct(user, course_id, storage_key=storage_key)
     storage = FakeStorage()
     storage.saved[storage_key] = b"content"
     monkeypatch.setattr(videos_router, "get_storage_service", lambda: storage)
@@ -544,12 +561,13 @@ def test_direct_regenerate_transcript(monkeypatch):
         "get_transcription_service",
         lambda: FakeTranscription("Fresh"),
     )
-    result = _run(regenerate_transcript, video_id)
+    result = _run(regenerate_transcript, video_id, user=user)
     assert result.transcript == "Fresh"
 
 
 def test_direct_regenerate_transcript_no_key(monkeypatch):
-    video_id = _create_video_direct(_create_course_direct())
+    user = _db_user()
+    video_id = _create_video_direct(user, _create_course_direct(user))
     monkeypatch.setattr(videos_router, "get_storage_service", lambda: FakeStorage())
 
     def _no_key():
@@ -557,7 +575,7 @@ def test_direct_regenerate_transcript_no_key(monkeypatch):
 
     monkeypatch.setattr(videos_router, "get_transcription_service", _no_key)
     with pytest.raises(HTTPException) as exc_info:
-        _run(regenerate_transcript, video_id)
+        _run(regenerate_transcript, video_id, user=user)
     assert exc_info.value.status_code == 503
 
 
@@ -567,8 +585,9 @@ class _ReadErrorStorage(FakeStorage):
 
 
 def test_direct_regenerate_transcript_read_error(monkeypatch):
-    course_id = _create_course_direct()
-    video_id = _create_video_direct(course_id)
+    user = _db_user()
+    course_id = _create_course_direct(user)
+    video_id = _create_video_direct(user, course_id)
     monkeypatch.setattr(
         videos_router, "get_storage_service", lambda: _ReadErrorStorage()
     )
@@ -576,5 +595,5 @@ def test_direct_regenerate_transcript_read_error(monkeypatch):
         videos_router, "get_transcription_service", lambda: FakeTranscription()
     )
     with pytest.raises(HTTPException) as exc_info:
-        _run(regenerate_transcript, video_id)
+        _run(regenerate_transcript, video_id, user=user)
     assert exc_info.value.status_code == 502
