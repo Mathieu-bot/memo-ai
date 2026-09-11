@@ -1,4 +1,5 @@
 import asyncio
+from uuid import uuid4
 
 import pytest
 from fastapi import HTTPException
@@ -15,7 +16,9 @@ from app.routers.notes import (
     update_note,
 )
 from app.schemas import CourseCreate, NoteCreate, NoteUpdate
-from tests.conftest import TestingSessionLocal
+from tests.conftest import TestingSessionLocal, _db_user
+
+MISSING_ID = "00000000-0000-0000-0000-000000000000"
 
 
 def _create_note(auth_client, generate_summary=False, title="Note"):
@@ -42,7 +45,7 @@ def test_create_note_with_ai(auth_client):
 
 def test_create_note_invalid_course(auth_client):
     response = auth_client.post(
-        "/notes/", json={"title": "N", "content": "c", "course_id": 999}
+        "/notes/", json={"title": "N", "content": "c", "course_id": MISSING_ID}
     )
     assert response.status_code == 404
 
@@ -56,7 +59,7 @@ def test_get_note(auth_client):
 
 
 def test_get_note_not_found(auth_client):
-    response = auth_client.get("/notes/999")
+    response = auth_client.get(f"/notes/{MISSING_ID}")
     assert response.status_code == 404
 
 
@@ -110,36 +113,40 @@ def _run(fn, *args, **kwargs):
     return asyncio.run(_go())
 
 
-def _create_course_direct() -> int:
-    return _run(create_course, CourseCreate(title="Math")).id
+def _create_course_direct(user):
+    return _run(create_course, CourseCreate(title="Math"), user=user).id
 
 
-def _create_note_direct(course_id: int, title="Note", content="Content") -> int:
+def _create_note_direct(user, course_id, title="Note", content="Content"):
     note = _run(
         create_note,
         NoteCreate(title=title, content=content, course_id=course_id),
+        user=user,
     )
     return note.id
 
 
 def test_direct_list_notes():
-    course_id = _create_course_direct()
-    _create_note_direct(course_id, title="Python")
-    notes = _run(get_notes)
+    user = _db_user()
+    course_id = _create_course_direct(user)
+    _create_note_direct(user, course_id, title="Python")
+    notes = _run(get_notes, user=user)
     assert [n.title for n in notes] == ["Python"]
 
 
 def test_direct_filter_notes_by_title_and_course():
-    course_a = _create_course_direct()
-    course_b = _create_course_direct()
-    _create_note_direct(course_a, title="Python")
-    _create_note_direct(course_b, title="Rust")
-    assert [n.title for n in _run(get_notes, title="Python")] == ["Python"]
-    assert [n.title for n in _run(get_notes, course_id=course_b)] == ["Rust"]
+    user = _db_user()
+    course_a = _create_course_direct(user)
+    course_b = _create_course_direct(user)
+    _create_note_direct(user, course_a, title="Python")
+    _create_note_direct(user, course_b, title="Rust")
+    assert [n.title for n in _run(get_notes, user=user, title="Python")] == ["Python"]
+    assert [n.title for n in _run(get_notes, user=user, course_id=course_b)] == ["Rust"]
 
 
 def test_direct_create_note_without_ai(monkeypatch):
-    course_id = _create_course_direct()
+    user = _db_user()
+    course_id = _create_course_direct(user)
 
     def _no_key():
         raise AIServiceError("no key")
@@ -148,17 +155,20 @@ def test_direct_create_note_without_ai(monkeypatch):
     note = _run(
         create_note,
         NoteCreate(title="T", content="C", course_id=course_id),
+        user=user,
         generate_summary=True,
     )
     assert note.summary is None
 
 
 def test_direct_create_note_with_ai(monkeypatch):
-    course_id = _create_course_direct()
+    user = _db_user()
+    course_id = _create_course_direct(user)
     monkeypatch.setattr("app.routers.notes.get_ai_provider", lambda: FakeProvider())
     note = _run(
         create_note,
         NoteCreate(title="T", content="C", course_id=course_id),
+        user=user,
         generate_summary=True,
     )
     assert note.summary == "AI summary"
@@ -166,85 +176,104 @@ def test_direct_create_note_with_ai(monkeypatch):
 
 def test_direct_create_note_invalid_course():
     with pytest.raises(NotFoundError):
-        _run(create_note, NoteCreate(title="T", content="C", course_id=999))
+        _run(
+            create_note,
+            NoteCreate(title="T", content="C", course_id=uuid4()),
+            user=_db_user(),
+        )
 
 
 def test_direct_get_note():
-    note_id = _create_note_direct(_create_course_direct())
-    assert _run(get_note, note_id).id == note_id
+    user = _db_user()
+    course_id = _create_course_direct(user)
+    note_id = _create_note_direct(user, course_id)
+    assert _run(get_note, note_id, user=user).id == note_id
 
 
 def test_direct_get_note_not_found():
     with pytest.raises(NotFoundError):
-        _run(get_note, 999)
+        _run(get_note, uuid4(), user=_db_user())
 
 
 def test_direct_update_note_title(monkeypatch):
-    course_id = _create_course_direct()
-    note_id = _create_note_direct(course_id)
+    user = _db_user()
+    course_id = _create_course_direct(user)
+    note_id = _create_note_direct(user, course_id)
     monkeypatch.setattr("app.routers.notes.get_ai_provider", lambda: FakeProvider())
-    updated = _run(update_note, note_id, NoteUpdate(title="Renamed"))
+    updated = _run(update_note, note_id, NoteUpdate(title="Renamed"), user=user)
     assert updated.title == "Renamed"
 
 
 def test_direct_update_note_regenerates_summary_on_content_change(monkeypatch):
-    course_id = _create_course_direct()
-    note_id = _create_note_direct(course_id)
+    user = _db_user()
+    course_id = _create_course_direct(user)
+    note_id = _create_note_direct(user, course_id)
     monkeypatch.setattr("app.routers.notes.get_ai_provider", lambda: FakeProvider())
-    updated = _run(update_note, note_id, NoteUpdate(content="New content"))
+    updated = _run(update_note, note_id, NoteUpdate(content="New content"), user=user)
     assert updated.summary == "AI summary"
 
 
 def test_direct_update_note_not_found():
     with pytest.raises(NotFoundError):
-        _run(update_note, 999, NoteUpdate(title="X"))
+        _run(update_note, uuid4(), NoteUpdate(title="X"), user=_db_user())
 
 
 def test_direct_update_note_invalid_course():
-    course_id = _create_course_direct()
-    note_id = _create_note_direct(course_id)
+    user = _db_user()
+    course_id = _create_course_direct(user)
+    note_id = _create_note_direct(user, course_id)
     with pytest.raises(NotFoundError):
-        _run(update_note, note_id, NoteUpdate(course_id=999))
+        _run(update_note, note_id, NoteUpdate(course_id=uuid4()), user=user)
 
 
 def test_direct_delete_note():
-    note_id = _create_note_direct(_create_course_direct())
-    assert _run(delete_note, note_id) is None
+    user = _db_user()
+    course_id = _create_course_direct(user)
+    note_id = _create_note_direct(user, course_id)
+    assert _run(delete_note, note_id, user=user) is None
     with pytest.raises(NotFoundError):
-        _run(get_note, note_id)
+        _run(get_note, note_id, user=user)
 
 
 def test_direct_delete_note_not_found():
     with pytest.raises(NotFoundError):
-        _run(delete_note, 999)
+        _run(delete_note, uuid4(), user=_db_user())
 
 
 def test_direct_summarize_note(monkeypatch):
-    note_id = _create_note_direct(_create_course_direct())
+    user = _db_user()
+    course_id = _create_course_direct(user)
+    note_id = _create_note_direct(user, course_id)
     monkeypatch.setattr("app.routers.notes.get_ai_provider", lambda: FakeProvider())
-    note = _run(summarize_note, note_id)
+    note = _run(summarize_note, note_id, user=user)
     assert note.summary == "AI summary"
 
 
 def test_direct_summarize_note_ai_failure(monkeypatch):
-    note_id = _create_note_direct(_create_course_direct())
+    user = _db_user()
+    course_id = _create_course_direct(user)
+    note_id = _create_note_direct(user, course_id)
     monkeypatch.setattr("app.routers.notes.get_ai_provider", lambda: FailingProvider())
     with pytest.raises(HTTPException) as exc_info:
-        _run(summarize_note, note_id)
+        _run(summarize_note, note_id, user=user)
     assert exc_info.value.status_code == 503
 
 
 def test_direct_generate_flashcards(monkeypatch):
-    note_id = _create_note_direct(_create_course_direct())
+    user = _db_user()
+    course_id = _create_course_direct(user)
+    note_id = _create_note_direct(user, course_id)
     monkeypatch.setattr("app.routers.notes.get_ai_provider", lambda: FakeProvider())
-    result = _run(generate_flashcards, note_id, num_cards=2)
+    result = _run(generate_flashcards, note_id, user=user, num_cards=2)
     assert result["flashcards"] == [{"front": "Front", "back": "Back"}]
     assert result["note_id"] == note_id
 
 
 def test_direct_generate_flashcards_ai_failure(monkeypatch):
-    note_id = _create_note_direct(_create_course_direct())
+    user = _db_user()
+    course_id = _create_course_direct(user)
+    note_id = _create_note_direct(user, course_id)
     monkeypatch.setattr("app.routers.notes.get_ai_provider", lambda: FailingProvider())
     with pytest.raises(HTTPException) as exc_info:
-        _run(generate_flashcards, note_id)
+        _run(generate_flashcards, note_id, user=user)
     assert exc_info.value.status_code == 503

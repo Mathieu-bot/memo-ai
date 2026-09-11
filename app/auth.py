@@ -1,9 +1,10 @@
 import logging
 from collections.abc import AsyncGenerator
 from typing import Annotated
+from uuid import UUID
 
 from fastapi import Depends, Request
-from fastapi_users import BaseUserManager, FastAPIUsers, IntegerIDMixin, exceptions
+from fastapi_users import BaseUserManager, FastAPIUsers, UUIDIDMixin, exceptions
 from fastapi_users.authentication import (
     AuthenticationBackend,
     BearerTransport,
@@ -21,7 +22,7 @@ logger = logging.getLogger(__name__)
 settings = get_settings()
 
 
-class UserManager(IntegerIDMixin, BaseUserManager[User, int]):
+class UserManager(UUIDIDMixin, BaseUserManager[User, UUID]):
     reset_password_token_secret = settings.JWT_SECRET
     verification_token_secret = settings.JWT_SECRET
 
@@ -76,7 +77,7 @@ async def get_user_manager(
 bearer_transport = BearerTransport(tokenUrl="auth/login")
 
 
-def get_jwt_strategy() -> JWTStrategy:
+def get_jwt_strategy() -> JWTStrategy[User, UUID]:
     return JWTStrategy(
         secret=settings.JWT_SECRET,
         lifetime_seconds=settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60,
@@ -89,6 +90,6 @@ auth_backend = AuthenticationBackend(
     get_strategy=get_jwt_strategy,
 )
 
-fastapi_users = FastAPIUsers[User, int](get_user_manager, [auth_backend])
+fastapi_users = FastAPIUsers[User, UUID](get_user_manager, [auth_backend])
 
 current_user = fastapi_users.current_user(active=True, verified=True)

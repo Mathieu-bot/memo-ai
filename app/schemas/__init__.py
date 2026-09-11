@@ -1,5 +1,6 @@
 from app.schemas.answer import Answer, AnswerCreate, AnswerUpdate
 from app.schemas.course import Course, CourseCreate, CourseUpdate
+from app.schemas.course_member import CourseMember, CourseMemberCreate
 from app.schemas.note import Note, NoteCreate, NoteUpdate, NoteWithSummary
 from app.schemas.question import (
     Question,
@@ -21,6 +22,8 @@ __all__ = [
     "Course",
     "CourseCreate",
     "CourseUpdate",
+    "CourseMember",
+    "CourseMemberCreate",
     "Quiz",
     "QuizCreate",
     "QuizUpdate",

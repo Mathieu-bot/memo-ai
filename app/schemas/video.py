@@ -1,4 +1,5 @@
 from datetime import datetime
+from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict
 
@@ -6,7 +7,7 @@ from pydantic import BaseModel, ConfigDict
 class VideoBase(BaseModel):
     title: str
     description: str | None = None
-    course_id: int
+    course_id: UUID
 
 
 class VideoCreate(VideoBase):
@@ -16,17 +17,17 @@ class VideoCreate(VideoBase):
 class VideoUpload(BaseModel):
     title: str
     description: str | None = None
-    course_id: int
+    course_id: UUID
 
 
 class VideoUpdate(BaseModel):
     title: str | None = None
     description: str | None = None
-    course_id: int | None = None
+    course_id: UUID | None = None
 
 
 class VideoInDBBase(VideoBase):
-    id: int
+    id: UUID
     storage_key: str
     duration: int | None = None
     transcript: str | None = None

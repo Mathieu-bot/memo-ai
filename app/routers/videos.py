@@ -1,15 +1,23 @@
 import mimetypes
 import uuid
 from typing import Annotated
+from uuid import UUID
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
 from fastapi.responses import FileResponse, RedirectResponse
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.access import (
+    course_owned_condition,
+    course_readable_condition,
+    get_course_or_404,
+)
+from app.auth import current_user
 from app.dependencies import get_db
 from app.exceptions import NotFoundError, TranscriptionError, UploadError
 from app.models import Course as CourseModel
+from app.models import User
 from app.models import Video as VideoModel
 from app.schemas import Video, VideoUpdate, VideoWithTranscript
 from app.services.ai import get_transcription_service
@@ -22,20 +30,32 @@ MAX_UPLOAD_BYTES = 300 * 1024 * 1024
 ALLOWED_MIME_PREFIXES = ("video/",)
 
 
-async def _get_video_or_404(video_id: int, db: AsyncSession) -> VideoModel:
-    result = await db.execute(select(VideoModel).where(VideoModel.id == video_id))
-    video = result.scalar_one_or_none()
+async def _get_accessible_video_or_404(
+    video_id: UUID, user: User, db: AsyncSession
+) -> VideoModel:
+    statement = (
+        select(VideoModel)
+        .join(CourseModel, VideoModel.course_id == CourseModel.id)
+        .where(VideoModel.id == video_id, course_readable_condition(user.id))
+    )
+    video = (await db.execute(statement)).scalar_one_or_none()
     if video is None:
         raise NotFoundError("Video", video_id)
     return video
 
 
-async def _get_course_or_404(course_id: int, db: AsyncSession) -> CourseModel:
-    result = await db.execute(select(CourseModel).where(CourseModel.id == course_id))
-    course = result.scalar_one_or_none()
-    if course is None:
-        raise NotFoundError("Course", course_id)
-    return course
+async def _get_owned_video_or_404(
+    video_id: UUID, user: User, db: AsyncSession
+) -> VideoModel:
+    statement = (
+        select(VideoModel)
+        .join(CourseModel, VideoModel.course_id == CourseModel.id)
+        .where(VideoModel.id == video_id, course_owned_condition(user.id))
+    )
+    video = (await db.execute(statement)).scalar_one_or_none()
+    if video is None:
+        raise NotFoundError("Video", video_id)
+    return video
 
 
 def _try_get_url(storage: StorageService, key: str) -> str | None:
@@ -59,24 +79,30 @@ def _to_video_with_transcript(
     return result
 
 
-def _build_storage_key(course_id: int) -> str:
+def _build_storage_key(course_id: UUID) -> str:
     return f"course_videos/{course_id}/{uuid.uuid4().hex}.mp4"
 
 
 @router.get("/", response_model=list[Video])
 async def get_videos(
     db: Annotated[AsyncSession, Depends(get_db)],
+    user: Annotated[User, Depends(current_user)],
     skip: int = 0,
     limit: int = 100,
     title: str | None = None,
-    course_id: int | None = None,
+    course_id: UUID | None = None,
 ):
-    statement = select(VideoModel)
+    statement = (
+        select(VideoModel)
+        .join(CourseModel, VideoModel.course_id == CourseModel.id)
+        .where(course_readable_condition(user.id))
+    )
     if title:
         statement = statement.where(VideoModel.title.contains(title))
     if course_id:
         statement = statement.where(VideoModel.course_id == course_id)
-    result = await db.execute(statement.offset(skip).limit(limit))
+    statement = statement.offset(skip).limit(limit)
+    result = await db.execute(statement)
     storage = get_storage_service()
     return [_to_video(video, storage) for video in result.scalars().all()]
 
@@ -84,13 +110,14 @@ async def get_videos(
 @router.post("/upload", response_model=Video, status_code=status.HTTP_201_CREATED)
 async def upload_video(
     title: Annotated[str, Form()],
-    course_id: Annotated[int, Form()],
+    course_id: Annotated[UUID, Form()],
     file: Annotated[UploadFile, File()],
     db: Annotated[AsyncSession, Depends(get_db)],
+    user: Annotated[User, Depends(current_user)],
     description: Annotated[str | None, Form()] = None,
     generate_transcript: Annotated[bool, Form()] = True,
 ):
-    await _get_course_or_404(course_id, db)
+    await get_course_or_404(db, user, course_id, write=True)
 
     if not file.content_type or not file.content_type.startswith(ALLOWED_MIME_PREFIXES):
         raise HTTPException(
@@ -136,19 +163,26 @@ async def upload_video(
 
 
 @router.get("/{video_id}", response_model=VideoWithTranscript)
-async def get_video(video_id: int, db: Annotated[AsyncSession, Depends(get_db)]):
-    db_video = await _get_video_or_404(video_id, db)
+async def get_video(
+    video_id: UUID,
+    db: Annotated[AsyncSession, Depends(get_db)],
+    user: Annotated[User, Depends(current_user)],
+):
+    db_video = await _get_accessible_video_or_404(video_id, user, db)
     return _to_video_with_transcript(db_video, get_storage_service())
 
 
 @router.put("/{video_id}", response_model=Video)
 async def update_video(
-    video_id: int, video: VideoUpdate, db: Annotated[AsyncSession, Depends(get_db)]
+    video_id: UUID,
+    video: VideoUpdate,
+    db: Annotated[AsyncSession, Depends(get_db)],
+    user: Annotated[User, Depends(current_user)],
 ):
-    db_video = await _get_video_or_404(video_id, db)
+    db_video = await _get_owned_video_or_404(video_id, user, db)
 
     if video.course_id is not None and video.course_id != db_video.course_id:
-        await _get_course_or_404(video.course_id, db)
+        await get_course_or_404(db, user, video.course_id, write=True)
 
     update_data = video.model_dump(exclude_unset=True)
     for key, value in update_data.items():
@@ -160,8 +194,12 @@ async def update_video(
 
 
 @router.get("/{video_id}/file")
-async def get_video_file(video_id: int, db: Annotated[AsyncSession, Depends(get_db)]):
-    db_video = await _get_video_or_404(video_id, db)
+async def get_video_file(
+    video_id: UUID,
+    db: Annotated[AsyncSession, Depends(get_db)],
+    user: Annotated[User, Depends(current_user)],
+):
+    db_video = await _get_accessible_video_or_404(video_id, user, db)
     storage = get_storage_service()
 
     url = _try_get_url(storage, db_video.storage_key)
@@ -179,8 +217,12 @@ async def get_video_file(video_id: int, db: Annotated[AsyncSession, Depends(get_
 
 
 @router.delete("/{video_id}", status_code=status.HTTP_204_NO_CONTENT)
-async def delete_video(video_id: int, db: Annotated[AsyncSession, Depends(get_db)]):
-    db_video = await _get_video_or_404(video_id, db)
+async def delete_video(
+    video_id: UUID,
+    db: Annotated[AsyncSession, Depends(get_db)],
+    user: Annotated[User, Depends(current_user)],
+):
+    db_video = await _get_owned_video_or_404(video_id, user, db)
 
     storage = get_storage_service()
     try:
@@ -197,9 +239,11 @@ async def delete_video(video_id: int, db: Annotated[AsyncSession, Depends(get_db
 
 @router.post("/{video_id}/regenerate-transcript", response_model=Video)
 async def regenerate_transcript(
-    video_id: int, db: Annotated[AsyncSession, Depends(get_db)]
+    video_id: UUID,
+    db: Annotated[AsyncSession, Depends(get_db)],
+    user: Annotated[User, Depends(current_user)],
 ):
-    db_video = await _get_video_or_404(video_id, db)
+    db_video = await _get_owned_video_or_404(video_id, user, db)
 
     try:
         transcription = get_transcription_service()

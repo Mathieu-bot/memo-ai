@@ -1,4 +1,5 @@
 import asyncio
+from uuid import uuid4
 
 import pytest
 
@@ -11,7 +12,9 @@ from app.routers.courses import (
     update_course,
 )
 from app.schemas import CourseCreate, CourseUpdate
-from tests.conftest import TestingSessionLocal
+from tests.conftest import TestingSessionLocal, _db_user
+
+MISSING_ID = "00000000-0000-0000-0000-000000000000"
 
 
 def test_list_courses_empty(auth_client):
@@ -46,7 +49,7 @@ def test_get_course(auth_client):
 
 
 def test_get_course_not_found(auth_client):
-    response = auth_client.get("/courses/999")
+    response = auth_client.get(f"/courses/{MISSING_ID}")
     assert response.status_code == 404
     assert "not found" in response.json()["detail"]
 
@@ -61,7 +64,7 @@ def test_update_course(auth_client):
 
 
 def test_update_course_invalid_course(auth_client):
-    response = auth_client.put("/courses/999", json={"title": "X"})
+    response = auth_client.put(f"/courses/{MISSING_ID}", json={"title": "X"})
     assert response.status_code == 404
 
 
@@ -73,7 +76,7 @@ def test_delete_course(auth_client):
 
 
 def test_delete_course_not_found(auth_client):
-    response = auth_client.delete("/courses/999")
+    response = auth_client.delete(f"/courses/{MISSING_ID}")
     assert response.status_code == 404
 
 
@@ -88,48 +91,54 @@ def _run(fn, *args, **kwargs):
 
 
 def test_direct_create_course():
-    course = _run(create_course, CourseCreate(title="Math", description="Basics"))
+    course = _run(
+        create_course, CourseCreate(title="Math", description="Basics"), user=_db_user()
+    )
     assert course.title == "Math"
     assert course.description == "Basics"
     assert course.id is not None
 
 
 def test_direct_list_courses():
-    _run(create_course, CourseCreate(title="Math"))
-    courses = _run(get_courses)
+    user = _db_user()
+    _run(create_course, CourseCreate(title="Math"), user=user)
+    courses = _run(get_courses, user=user)
     assert [c.title for c in courses] == ["Math"]
 
 
 def test_direct_get_course():
-    created = _run(create_course, CourseCreate(title="Math"))
-    fetched = _run(get_course, created.id)
+    user = _db_user()
+    created = _run(create_course, CourseCreate(title="Math"), user=user)
+    fetched = _run(get_course, created.id, user=user)
     assert fetched.id == created.id
 
 
 def test_direct_get_course_not_found():
     with pytest.raises(NotFoundError):
-        _run(get_course, 999)
+        _run(get_course, uuid4(), user=_db_user())
 
 
 def test_direct_update_course():
-    created = _run(create_course, CourseCreate(title="Math"))
-    updated = _run(update_course, created.id, CourseUpdate(title="Advanced"))
+    user = _db_user()
+    created = _run(create_course, CourseCreate(title="Math"), user=user)
+    updated = _run(update_course, created.id, CourseUpdate(title="Advanced"), user=user)
     assert updated.title == "Advanced"
     assert updated.description is None
 
 
 def test_direct_update_course_not_found():
     with pytest.raises(NotFoundError):
-        _run(update_course, 999, CourseUpdate(title="X"))
+        _run(update_course, uuid4(), CourseUpdate(title="X"), user=_db_user())
 
 
 def test_direct_delete_course():
-    created = _run(create_course, CourseCreate(title="Math"))
-    assert _run(delete_course, created.id) is None
+    user = _db_user()
+    created = _run(create_course, CourseCreate(title="Math"), user=user)
+    assert _run(delete_course, created.id, user=user) is None
     with pytest.raises(NotFoundError):
-        _run(get_course, created.id)
+        _run(get_course, created.id, user=user)
 
 
 def test_direct_delete_course_not_found():
     with pytest.raises(NotFoundError):
-        _run(delete_course, 999)
+        _run(delete_course, uuid4(), user=_db_user())

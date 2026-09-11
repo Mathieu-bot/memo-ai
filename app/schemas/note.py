@@ -1,4 +1,5 @@
 from datetime import datetime
+from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict
 
@@ -6,7 +7,7 @@ from pydantic import BaseModel, ConfigDict
 class NoteBase(BaseModel):
     title: str
     content: str
-    course_id: int
+    course_id: UUID
 
 
 class NoteCreate(NoteBase):
@@ -16,11 +17,11 @@ class NoteCreate(NoteBase):
 class NoteUpdate(BaseModel):
     title: str | None = None
     content: str | None = None
-    course_id: int | None = None
+    course_id: UUID | None = None
 
 
 class NoteInDBBase(NoteBase):
-    id: int
+    id: UUID
     summary: str | None = None
     created_at: datetime
     updated_at: datetime

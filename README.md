@@ -10,6 +10,8 @@ MemoAI helps students memorize their lessons using AI to generate summaries, qui
   and mandatory email verification
 - **Course Management**: Organize your courses and their content
 - **Course Notes**: Add your notes and get AI-generated summaries
+- **Course Sharing**: Share a course with other users (view-only); only the
+  owner can edit content or manage members
 - **Quiz Generation**: Create quizzes to test your knowledge
 - **Flashcards**: Generate flashcards for active recall
 - **Video Upload**: Store your course videos in Backblaze B2 (private bucket
@@ -104,7 +106,7 @@ docker-compose up --build
 ```
 
 Notes:
-- Database tables are created and seeded automatically on container start
+- Database tables are created automatically on container start
   (`docker-entrypoint.sh` runs `init_db.py`, it is idempotent).
 - The SQLite file lives in the `data/` folder (bind-mounted from `./data`).
   Delete it to reset the database.
@@ -147,6 +149,37 @@ curl http://localhost:8000/courses/ \
 
 All endpoints except `/auth/*` and `/users/*` require a verified, authenticated
 user.
+
+### Data isolation & sharing
+
+Every resource belongs to one private workspace per user, and all resource ids
+are **UUIDs** (non-guessable, not enumerable):
+
+- **Courses are private by default.** Listing `/courses/`, `/notes/`,
+  `/videos/` or `/quizzes/` only returns what you own or what was explicitly
+  shared with you.
+- **Read access** is granted to the course owner and to members.
+- **Write access** (create/edit/delete a course note, video, quiz; upload; AI
+  quiz generation) is reserved for the **course owner**.
+- Accessing or mutating a resource you don't own returns a neutral `404`
+  (it never reveals whether the resource exists).
+- **Sharing a course** (owner only):
+
+  ```bash
+  # Add a member (they can now read the course and its content)
+  curl -X POST http://localhost:8000/courses/<course_id>/members \
+    -H "Authorization: Bearer <access_token>" \
+    -H "Content-Type: application/json" \
+    -d '{"user_id":"<target_user_id>"}'
+
+  # List members (owner + members)
+  curl http://localhost:8000/courses/<course_id>/members \
+    -H "Authorization: Bearer <access_token>"
+
+  # Remove a member (revokes access immediately)
+  curl -X DELETE http://localhost:8000/courses/<course_id>/members/<user_id> \
+    -H "Authorization: Bearer <access_token>"
+  ```
 
 ## Development Workflow
 
@@ -245,6 +278,8 @@ memoai/
 | GET/PATCH/DELETE | `/users/{id}` | Get / update / delete a user (authenticated) |
 | GET/POST | `/courses/` | List / create courses |
 | GET/PUT/DELETE | `/courses/{id}` | Get / update / delete a course |
+| GET/POST | `/courses/{id}/members` | List / add members (owner only) |
+| DELETE | `/courses/{id}/members/{user_id}` | Remove a member (owner only) |
 | GET/POST | `/quizzes/` | List / create quizzes |
 | GET/PUT/DELETE | `/quizzes/{id}` | Get / update / delete a quiz |
 | GET/POST | `/notes/` | List / create notes |

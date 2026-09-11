@@ -1,15 +1,17 @@
 from typing import Annotated
+from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.access import get_course_or_404
+from app.auth import current_user
 from app.dependencies import get_db
-from app.exceptions import AIServiceError, NotFoundError
+from app.exceptions import AIServiceError
 from app.models import Answer as AnswerModel
-from app.models import Course as CourseModel
 from app.models import Question as QuestionModel
 from app.models import Quiz as QuizModel
+from app.models import User
 from app.services.ai import QuizGenerator, get_ai_provider
 
 router = APIRouter(prefix="/ai", tags=["ai"])
@@ -17,16 +19,12 @@ router = APIRouter(prefix="/ai", tags=["ai"])
 
 @router.post("/generate-quiz/{course_id}", status_code=status.HTTP_201_CREATED)
 async def generate_quiz(
-    course_id: int,
+    course_id: UUID,
     db: Annotated[AsyncSession, Depends(get_db)],
+    user: Annotated[User, Depends(current_user)],
     num_questions: int = 5,
 ):
-    course_result = await db.execute(
-        select(CourseModel).where(CourseModel.id == course_id)
-    )
-    course = course_result.scalar_one_or_none()
-    if course is None:
-        raise NotFoundError("Course", course_id)
+    course = await get_course_or_404(db, user, course_id, write=True)
 
     provider = get_ai_provider()
     quiz_generator = QuizGenerator(provider)

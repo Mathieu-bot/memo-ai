@@ -1,3 +1,5 @@
+from uuid import UUID
+
 from pydantic import BaseModel, ConfigDict
 
 
@@ -16,7 +18,7 @@ class CourseUpdate(BaseModel):
 
 
 class CourseInDBBase(CourseBase):
-    id: int
+    id: UUID
     model_config = ConfigDict(from_attributes=True)
 
 

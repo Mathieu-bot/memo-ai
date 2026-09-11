@@ -1,4 +1,5 @@
 import asyncio
+from uuid import UUID, uuid4
 
 import pytest
 from fastapi import HTTPException
@@ -13,7 +14,9 @@ from app.services.ai import (
     SummaryService,
 )
 from app.services.ai.gemini import GeminiProvider, get_ai_provider
-from tests.conftest import TestingSessionLocal
+from tests.conftest import TestingSessionLocal, _db_user
+
+MISSING_ID = "00000000-0000-0000-0000-000000000000"
 
 
 class RecordingProvider:
@@ -38,7 +41,7 @@ class RecordingProvider:
 
 
 def test_generate_quiz_invalid_course(auth_client):
-    response = auth_client.post("/ai/generate-quiz/999")
+    response = auth_client.post(f"/ai/generate-quiz/{MISSING_ID}")
     assert response.status_code == 404
 
 
@@ -283,35 +286,38 @@ def _run(fn, *args, **kwargs):
     return asyncio.run(_go())
 
 
-def _create_course_direct() -> int:
-    return _run(create_course, CourseCreate(title="Math")).id
+def _create_course_direct(user):
+    return _run(create_course, CourseCreate(title="Math"), user=user).id
 
 
 def test_direct_generate_quiz_success(monkeypatch):
-    course_id = _create_course_direct()
+    user = _db_user()
+    course_id = _create_course_direct(user)
     monkeypatch.setattr("app.routers.ai.get_ai_provider", lambda: _QuizProvider())
-    result = _run(generate_quiz, course_id, num_questions=3)
-    assert isinstance(result["quiz_id"], int)
+    result = _run(generate_quiz, course_id, user=user, num_questions=3)
+    assert isinstance(result["quiz_id"], UUID)
 
 
 def test_direct_generate_quiz_invalid_course():
     with pytest.raises(NotFoundError):
-        _run(generate_quiz, 999)
+        _run(generate_quiz, uuid4(), user=_db_user())
 
 
 def test_direct_generate_quiz_invalid_structure(monkeypatch):
-    course_id = _create_course_direct()
+    user = _db_user()
+    course_id = _create_course_direct(user)
     monkeypatch.setattr("app.routers.ai.get_ai_provider", lambda: _EmptyQuizProvider())
     with pytest.raises(HTTPException) as exc_info:
-        _run(generate_quiz, course_id)
+        _run(generate_quiz, course_id, user=user)
     assert exc_info.value.status_code == 502
 
 
 def test_direct_generate_quiz_ai_failure(monkeypatch):
-    course_id = _create_course_direct()
+    user = _db_user()
+    course_id = _create_course_direct(user)
     monkeypatch.setattr(
         "app.routers.ai.get_ai_provider", lambda: _FailingQuizProvider()
     )
     with pytest.raises(HTTPException) as exc_info:
-        _run(generate_quiz, course_id)
+        _run(generate_quiz, course_id, user=user)
     assert exc_info.value.status_code == 503
