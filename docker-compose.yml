@@ -1,20 +1,26 @@
-version: "3.8"
-
 services:
   api:
     build: .
+    image: memoai:v1.0.0
     container_name: memoai-api
     ports:
       - "8000:8000"
     env_file:
       - .env
     environment:
-      # Absolute paths inside the container; volume below persists them.
+      # Absolute paths inside the container; the volume below persists them.
       DATABASE_URL: sqlite+aiosqlite:////data/memoai.db
       STORAGE_DIR: /data/uploads
+      # Production mode: the app refuses to start unless PUBLIC_BASE_URL and
+      # RESEND_API_KEY are set and CORS_ORIGINS does not contain "*".
+      # For a no-email local demo, comment this line (or set ENVIRONMENT=development).
+      ENVIRONMENT: production
     volumes:
       - ./data:/data
     restart: unless-stopped
+    init: true
+    cpus: 1.5
+    mem_limit: 2g
     healthcheck:
       test:
         [

@@ -80,46 +80,61 @@ MemoAI helps students memorize their lessons using AI to generate summaries, qui
      `NET_IPV4_ONLY=true` so boto3 uses IPv4; otherwise transfers to
      dual-stack S3 endpoints can hang.
 
-5. Initialize the database
+6. Initialize the database
    ```bash
    python init_db.py
    ```
 
-6. Start the application
+7. Start the application
    ```bash
    uvicorn app.main:app --reload
    ```
 
-7. Access the API at http://localhost:8000
+8. Access the API at http://localhost:8000
    - Interactive docs: http://localhost:8000/docs
 
-## Running with Docker
+## Deploying with Docker Compose
 
 Requires [Docker](https://docs.docker.com/get-docker/) and Docker Compose.
+The compose file builds the image, sets `ENVIRONMENT=production`, persists the
+SQLite database and uploads in `./data/` and runs a healthcheck.
 
 ```bash
-# 1. Configure the environment (create your JWT_SECRET too)
+# 1. Configure the environment (see required production variables below)
 cp .env.example .env
 
 # 2. Build and start
 docker-compose up --build
 ```
 
+Production mode enforces a secure configuration **at startup** — the API
+refuses to boot unless all of the following are set in `.env`:
+
+| Variable          | Production value                                |
+|-------------------|-------------------------------------------------|
+| `ENVIRONMENT`     | `production` (set by docker-compose.yml)        |
+| `PUBLIC_BASE_URL` | your public API URL, e.g. `https://api.example.com` |
+| `RESEND_API_KEY`  | a real Resend API key (`https://resend.com`)    |
+| `CORS_ORIGINS`    | your app origins, never `["*"]`                 |
+| `RATE_LIMITING_ENABLED` | `true` (production refuses `false`)       |
+
 Notes:
 - Database tables are created automatically on container start
   (`docker-entrypoint.sh` runs `init_db.py`, it is idempotent).
-- The SQLite file lives in the `data/` folder (bind-mounted from `./data`).
-  Delete it to reset the database.
-- `DATABASE_URL` is overridden by `docker-compose.yml` to point to `/data/memoai.db`.
-- The API listens on http://localhost:8000 (or `http://localhost:8000/docs`).
+- The SQLite file lives in `./data/memoai.db` (bind-mounted). Delete it to
+  **reset the database** (the volume is recreated on next start).
+- For a quick local demo *without* email delivery, comment the
+  `ENVIRONMENT: production` line in `docker-compose.yml` (or run via
+  `uvicorn app.main:app` in development) — verification URLs are then printed
+  to the server logs.
+- The API listens on http://localhost:8000 (interactive docs: `/docs`).
 
 ## Authentication
 
 Accounts use **email as login identifier** + a **unique username**. Email
 **verification is mandatory**: new users must verify their email before they can
-use the API. In this MVP the verification link is printed to the server logs
-(in production, hook it to a real email service via `on_after_request_verify`
-in `app/auth.py`).
+use the API. Verification links are sent through Resend (production) or printed
+to the server logs (development, when `RESEND_API_KEY` is empty).
 
 ```bash
 # 1. Register (returns the user; is_verified is False)
@@ -199,8 +214,14 @@ ruff format --check .     # verify in CI
 ## Running Tests
 
 ```bash
-pytest tests/ -v
+pytest tests/ -v                      # full suite
+pytest --cov=app                      # test suite + coverage (>= 80%)
+python scripts/smoke_e2e.py           # E2E smoke against a real HTTP server (23 checks)
 ```
+
+The smoke script boots a real uvicorn process on `127.0.0.1:8123` with an
+isolated temp database, then exercises register/verify/login, CRUD, sharing,
+uploads and error codes end to end. It exits non-zero if any check fails.
 
 ## Technologies Used
 
@@ -239,6 +260,8 @@ memoai/
 │       │   └── local.py          # Local-disk fallback
 │       └── video_service.py
 ├── tests/                    # pytest suite
+├── scripts/
+│   └── smoke_e2e.py          # End-to-end smoke test (23 HTTP checks)
 ├── .env.example
 ├── init_db.py
 └── README.md
