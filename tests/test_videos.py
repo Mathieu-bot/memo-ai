@@ -1,5 +1,7 @@
 import asyncio
+import inspect
 import subprocess
+from io import BytesIO
 from uuid import uuid4
 
 import pytest
@@ -21,9 +23,12 @@ from app.routers.videos import (
 from app.schemas import CourseCreate, VideoUpdate
 from app.services.storage import LocalStorageService
 from app.services.video_service import VideoService
-from tests.conftest import TestingSessionLocal, _db_user
+from tests.conftest import TestingSessionLocal, _db_user, make_request
 
 MISSING_ID = "00000000-0000-0000-0000-000000000000"
+
+# Truncated MP4: "ftyp" box followed by padding (passes the magic-byte check).
+FAKE_MP4 = b"\x00\x00\x00\x18ftypmp42" + b"\x00\x00\x00\x00\x00\x00\x00\x00"
 
 
 def _create_course(auth_client) -> dict:
@@ -35,7 +40,7 @@ def _upload(
     course,
     tmp_path,
     monkeypatch,
-    file_bytes=b"fake-video-bytes",
+    file_bytes=FAKE_MP4,
     storage=None,
 ):
     if storage is None:
@@ -58,12 +63,12 @@ class FakeTranscription:
     def __init__(self, text="Fresh transcript"):
         self.text = text
 
-    def transcribe_bytes(self, data, suffix=".mp4"):
+    def transcribe_file(self, file_obj, suffix=".mp4"):
         return self.text
 
 
 class FailingTranscription:
-    def transcribe_bytes(self, data, suffix=".mp4"):
+    def transcribe_file(self, file_obj, suffix=".mp4"):
         raise TranscriptionError()
 
 
@@ -87,6 +92,33 @@ def test_video_upload_invalid_course(auth_client):
     assert response.status_code == 404
 
 
+def test_upload_video_rejects_bad_magic_bytes(auth_client, tmp_path, monkeypatch):
+    course = _create_course(auth_client)
+    storage = LocalStorageService(base_dir=tmp_path)
+    monkeypatch.setattr(videos_router, "get_storage_service", lambda: storage)
+    response = auth_client.post(
+        "/videos/upload",
+        data={"title": "Fake", "course_id": str(course["id"])},
+        files={
+            "file": ("fake.mp4", b"this-is-not-a-real-mp4-header-aaaaaaaa", "video/mp4")
+        },
+    )
+    assert response.status_code == 400
+    course_dir = tmp_path / "course_videos"
+    assert not course_dir.exists() or not any(course_dir.iterdir())
+
+
+def test_upload_video_too_large_returns_413(auth_client, monkeypatch):
+    course = _create_course(auth_client)
+    monkeypatch.setattr(videos_router, "MAX_UPLOAD_BYTES", 10)
+    response = auth_client.post(
+        "/videos/upload",
+        data={"title": "Big", "course_id": str(course["id"])},
+        files={"file": ("big.mp4", FAKE_MP4, "video/mp4")},
+    )
+    assert response.status_code == 413
+
+
 def test_list_videos_empty(auth_client):
     response = auth_client.get("/videos/")
     assert response.status_code == 200
@@ -108,7 +140,7 @@ def test_upload_video_success(auth_client, tmp_path, monkeypatch):
 
     stored = list((tmp_path / "course_videos" / str(course["id"])).glob("*.mp4"))
     assert len(stored) == 1
-    assert stored[0].read_bytes() == b"fake-video-bytes"
+    assert stored[0].read_bytes() == FAKE_MP4
 
 
 def test_upload_video_with_transcript(auth_client, tmp_path, monkeypatch):
@@ -128,7 +160,7 @@ def test_upload_video_with_transcript(auth_client, tmp_path, monkeypatch):
             "course_id": str(course["id"]),
             "generate_transcript": "true",
         },
-        files={"file": ("intro.mp4", b"fake-video-bytes", "video/mp4")},
+        files={"file": ("intro.mp4", FAKE_MP4, "video/mp4")},
     )
     assert response.status_code == 201, response.text
     assert response.json()["transcript"] == "Hello world"
@@ -149,7 +181,7 @@ def test_upload_video_transcript_fallback(auth_client, tmp_path, monkeypatch):
             "course_id": str(course["id"]),
             "generate_transcript": "true",
         },
-        files={"file": ("intro.mp4", b"fake-video-bytes", "video/mp4")},
+        files={"file": ("intro.mp4", FAKE_MP4, "video/mp4")},
     )
     assert response.status_code == 201, response.text
     assert response.json()["transcript"] == "Transcription not available"
@@ -170,7 +202,7 @@ def test_get_video_file_serves_local(auth_client, tmp_path, monkeypatch):
 
     response = auth_client.get(f"/videos/{video['id']}/file")
     assert response.status_code == 200
-    assert response.content == b"fake-video-bytes"
+    assert response.content == FAKE_MP4
 
 
 class FakeRemoteStorage:
@@ -180,13 +212,18 @@ class FakeRemoteStorage:
         self.files = {}
 
     async def save(self, key, data, content_type):
-        self.files[key] = data
+        self.files[key] = data.read()
 
     async def delete(self, key):
         self.files.pop(key, None)
 
     async def read(self, key):
         return self.files[key]
+
+    async def read_to_file(self, key, dest_path):
+
+        with open(dest_path, "wb") as f:
+            f.write(self.files[key])
 
     def get_url(self, key):
         return f"https://presigned.example.test/{key}"
@@ -249,13 +286,17 @@ class FakeStorage:
         self.saved = {}
 
     async def save(self, key, data, content_type):
-        self.saved[key] = data
+        self.saved[key] = data.read()
 
     async def delete(self, key):
         self.saved.pop(key, None)
 
     async def read(self, key):
         return self.saved[key]
+
+    async def read_to_file(self, key, dest_path):
+        with open(dest_path, "wb") as f:
+            f.write(self.saved[key])
 
     def get_url(self, key):
         return None
@@ -275,20 +316,23 @@ def test_video_service_process_upload_with_duration(monkeypatch):
     )
     result = asyncio.run(
         VideoService(storage, FakeTranscription("summary")).process_upload(
-            "course_videos/1/x.mp4", b"bytes", "video/mp4", generate_transcript=True
+            "course_videos/1/x.mp4",
+            BytesIO(FAKE_MP4),
+            "video/mp4",
+            generate_transcript=True,
         )
     )
     assert result["storage_key"] == "course_videos/1/x.mp4"
     assert result["duration"] == 3
     assert result["transcript"] == "summary"
-    assert storage.saved["course_videos/1/x.mp4"] == b"bytes"
+    assert storage.saved["course_videos/1/x.mp4"] == FAKE_MP4
 
 
 def test_video_service_transcript_empty_without_transcription():
     storage = FakeStorage()
     result = asyncio.run(
         VideoService(storage, None).process_upload(
-            "k.mp4", b"bytes", "video/mp4", generate_transcript=True
+            "k.mp4", BytesIO(FAKE_MP4), "video/mp4", generate_transcript=True
         )
     )
     assert result["transcript"] == "Transcription not available"
@@ -308,7 +352,7 @@ def test_video_service_transcript_fallback_on_error():
     storage.saved["k.mp4"] = b"data"
     result = asyncio.run(
         VideoService(storage, FailingTranscription()).process_upload(
-            "k.mp4", b"bytes", "video/mp4", generate_transcript=True
+            "k.mp4", BytesIO(FAKE_MP4), "video/mp4", generate_transcript=True
         )
     )
     assert result["transcript"] == "Transcription not available"
@@ -317,10 +361,10 @@ def test_video_service_transcript_fallback_on_error():
 def test_video_service_regenerate_raises_when_storage_read_fails():
     storage = FakeStorage()
 
-    async def _fail_read(key):
+    async def _fail_read(key, dest_path):
         raise UploadError("storage unavailable")
 
-    storage.read = _fail_read
+    storage.read_to_file = _fail_read
     with pytest.raises(UploadError):
         asyncio.run(
             VideoService(storage, FakeTranscription()).regenerate_transcript("k.mp4")
@@ -332,7 +376,7 @@ def test_probe_duration_failure_returns_none(monkeypatch):
         raise subprocess.CalledProcessError(1, cmd)
 
     monkeypatch.setattr("app.services.video_service.subprocess.run", _boom)
-    assert VideoService(FakeStorage())._probe_duration(b"data") is None
+    assert VideoService(FakeStorage())._probe_duration(BytesIO(b"bad")) is None
 
 
 def test_build_storage_key_format():
@@ -356,7 +400,6 @@ def _make_video_model():
         storage_key="course_videos/7/x.mp4",
         duration=3,
         transcript=None,
-        is_synchronized=True,
         created_at=datetime.now(UTC),
     )
 
@@ -401,7 +444,11 @@ def test_try_get_url_returns_none_on_error():
 def _run(fn, *args, **kwargs):
     async def _go():
         async with TestingSessionLocal() as session:
-            return await fn(*args, db=session, **kwargs)
+            call_args = list(args)
+            params = list(inspect.signature(fn).parameters)
+            if params and params[0] == "request":
+                call_args.insert(0, make_request())
+            return await fn(*call_args, db=session, **kwargs)
 
     return asyncio.run(_go())
 
@@ -505,7 +552,7 @@ def test_direct_get_video_file_local(monkeypatch, tmp_path):
     storage_key = "course_videos/7/local.mp4"
     video_id = _create_video_direct(user, _create_course_direct(user), storage_key)
     storage = LocalStorageService(base_dir=tmp_path)
-    asyncio.run(storage.save(storage_key, b"content", "video/mp4"))
+    asyncio.run(storage.save(storage_key, BytesIO(b"content"), "video/mp4"))
     monkeypatch.setattr(videos_router, "get_storage_service", lambda: storage)
     response = _run(get_video_file, video_id, user=user)
     assert isinstance(response, FileResponse)
@@ -521,6 +568,51 @@ def test_direct_get_video_file_missing(monkeypatch):
     assert exc_info.value.status_code == 404
 
 
+class _FailingCommitSession:
+    """Wraps a session whose commit always fails (forces compensation)."""
+
+    def __init__(self, session):
+        self._session = session
+
+    async def commit(self):
+        raise RuntimeError("forced commit failure")
+
+    def __getattr__(self, name):
+        return getattr(self._session, name)
+
+
+def test_upload_compensates_storage_when_db_insert_fails(monkeypatch):
+    from starlette.datastructures import Headers
+    from starlette.datastructures import UploadFile as StarletteUploadFile
+
+    user = _db_user()
+    course_id = _create_course_direct(user)
+    storage = FakeStorage()
+    monkeypatch.setattr(videos_router, "get_storage_service", lambda: storage)
+
+    file = StarletteUploadFile(
+        BytesIO(FAKE_MP4),
+        filename="vid.mp4",
+        headers=Headers({"content-type": "video/mp4"}),
+    )
+
+    async def _go():
+        async with TestingSessionLocal() as session:
+            return await videos_router.upload_video(
+                make_request(),
+                title="T",
+                course_id=course_id,
+                file=file,
+                db=_FailingCommitSession(session),
+                user=user,
+                generate_transcript=False,
+            )
+
+    with pytest.raises(RuntimeError, match="forced commit failure"):
+        asyncio.run(_go())
+    assert storage.saved == {}
+
+
 def test_direct_delete_video(monkeypatch):
     user = _db_user()
     course_id = _create_course_direct(user)
@@ -530,6 +622,7 @@ def test_direct_delete_video(monkeypatch):
     storage.saved[storage_key] = b"content"
     monkeypatch.setattr(videos_router, "get_storage_service", lambda: storage)
     assert _run(delete_video, video_id, user=user) is None
+    assert storage.saved == {}
 
 
 class _DeleteErrorStorage(FakeStorage):
@@ -538,14 +631,16 @@ class _DeleteErrorStorage(FakeStorage):
 
 
 def test_direct_delete_video_storage_error(monkeypatch):
+    # Storage deletion is best-effort after the DB row is gone.
     user = _db_user()
-    video_id = _create_video_direct(user, _create_course_direct(user))
-    monkeypatch.setattr(
-        videos_router, "get_storage_service", lambda: _DeleteErrorStorage()
-    )
-    with pytest.raises(HTTPException) as exc_info:
-        _run(delete_video, video_id, user=user)
-    assert exc_info.value.status_code == 502
+    course_id = _create_course_direct(user)
+    storage_key = "course_videos/7/del_err.mp4"
+    video_id = _create_video_direct(user, course_id, storage_key=storage_key)
+    storage = _DeleteErrorStorage()
+    storage.saved[storage_key] = b"content"
+    monkeypatch.setattr(videos_router, "get_storage_service", lambda: storage)
+    assert _run(delete_video, video_id, user=user) is None
+    assert storage.saved == {storage_key: b"content"}
 
 
 def test_direct_regenerate_transcript(monkeypatch):
@@ -580,7 +675,7 @@ def test_direct_regenerate_transcript_no_key(monkeypatch):
 
 
 class _ReadErrorStorage(FakeStorage):
-    async def read(self, key):
+    async def read_to_file(self, key, dest_path):
         raise UploadError("read failed")
 
 

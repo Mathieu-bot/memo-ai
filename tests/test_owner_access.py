@@ -116,7 +116,13 @@ def test_foreign_video_hidden(auth_client, tmp_path, monkeypatch):
             "course_id": str(course["id"]),
             "generate_transcript": "false",
         },
-        files={"file": ("intro.mp4", b"fake-video-bytes", "video/mp4")},
+        files={
+            "file": (
+                "intro.mp4",
+                b"\x00\x00\x00\x18ftypmp42" + b"\x00\x00\x00\x00",
+                "video/mp4",
+            )
+        },
     ).json()
 
     bob = _login_headers(auth_client, "bob@example.com", "bob")

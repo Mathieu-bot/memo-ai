@@ -1,9 +1,21 @@
+import logging
 import mimetypes
+import tempfile
 import uuid
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
+from fastapi import (
+    APIRouter,
+    Depends,
+    File,
+    Form,
+    HTTPException,
+    Query,
+    Request,
+    UploadFile,
+    status,
+)
 from fastapi.responses import FileResponse, RedirectResponse
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -14,8 +26,10 @@ from app.access import (
     get_course_or_404,
 )
 from app.auth import current_user
+from app.config import get_settings
 from app.dependencies import get_db
 from app.exceptions import NotFoundError, TranscriptionError, UploadError
+from app.limiter import limiter
 from app.models import Course as CourseModel
 from app.models import User
 from app.models import Video as VideoModel
@@ -24,10 +38,20 @@ from app.services.ai import get_transcription_service
 from app.services.storage import StorageService, get_storage_service
 from app.services.video_service import VideoService
 
+logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/videos", tags=["videos"])
+settings = get_settings()
 
-MAX_UPLOAD_BYTES = 300 * 1024 * 1024
+MAX_UPLOAD_BYTES = settings.MAX_UPLOAD_BYTES
+CHUNK_SIZE = 1024 * 1024
 ALLOWED_MIME_PREFIXES = ("video/",)
+
+
+def _looks_like_video(header: bytes) -> bool:
+    """Check magic bytes of common video containers (mp4/mov/m4v, webm/mkv)."""
+    if len(header) >= 8 and header[4:8] == b"ftyp":
+        return True
+    return header.startswith(b"\x1a\x45\xdf\xa3")
 
 
 async def _get_accessible_video_or_404(
@@ -85,10 +109,11 @@ def _build_storage_key(course_id: UUID) -> str:
 
 @router.get("/", response_model=list[Video])
 async def get_videos(
+    request: Request,
     db: Annotated[AsyncSession, Depends(get_db)],
     user: Annotated[User, Depends(current_user)],
-    skip: int = 0,
-    limit: int = 100,
+    skip: Annotated[int, Query(ge=0)] = 0,
+    limit: Annotated[int, Query(ge=1, le=100)] = 100,
     title: str | None = None,
     course_id: UUID | None = None,
 ):
@@ -108,7 +133,9 @@ async def get_videos(
 
 
 @router.post("/upload", response_model=Video, status_code=status.HTTP_201_CREATED)
+@limiter.limit(settings.RATE_LIMIT_UPLOAD)
 async def upload_video(
+    request: Request,
     title: Annotated[str, Form()],
     course_id: Annotated[UUID, Form()],
     file: Annotated[UploadFile, File()],
@@ -125,41 +152,77 @@ async def upload_video(
             detail="File must be a video",
         )
 
-    file_bytes = await file.read()
-    if len(file_bytes) > MAX_UPLOAD_BYTES:
+    if file.size is not None and file.size > MAX_UPLOAD_BYTES:
         raise HTTPException(
             status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
             detail="Video exceeds maximum size of 300 MB",
         )
 
-    storage = get_storage_service()
-    transcription = get_transcription_service() if generate_transcript else None
-    video_service = VideoService(storage, transcription)
-
+    stream = tempfile.SpooledTemporaryFile(max_size=32 * CHUNK_SIZE)
     try:
-        result = await video_service.process_upload(
-            _build_storage_key(course_id),
-            file_bytes,
-            file.content_type,
-            generate_transcript,
-        )
-    except UploadError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)
-        ) from exc
+        total = 0
+        while True:
+            chunk = await file.read(CHUNK_SIZE)
+            if not chunk:
+                break
+            total += len(chunk)
+            if total > MAX_UPLOAD_BYTES:
+                raise HTTPException(
+                    status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+                    detail="Video exceeds maximum size of 300 MB",
+                )
+            stream.write(chunk)
 
-    db_video = VideoModel(
-        title=title,
-        description=description,
-        course_id=course_id,
-        storage_key=result["storage_key"],
-        duration=result.get("duration"),
-        transcript=result.get("transcript"),
-    )
-    db.add(db_video)
-    await db.commit()
-    await db.refresh(db_video)
-    return _to_video(db_video, storage)
+        if total == 0:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST, detail="File must be a video"
+            )
+
+        stream.seek(0)
+        if not _looks_like_video(stream.read(12)):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST, detail="File must be a video"
+            )
+
+        stream.seek(0)
+        storage = get_storage_service()
+        transcription = get_transcription_service() if generate_transcript else None
+        video_service = VideoService(storage, transcription)
+
+        try:
+            result = await video_service.process_upload(
+                _build_storage_key(course_id),
+                stream,
+                file.content_type,
+                generate_transcript,
+            )
+        except UploadError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)
+            ) from exc
+
+        db_video = VideoModel(
+            title=title,
+            description=description,
+            course_id=course_id,
+            storage_key=result["storage_key"],
+            duration=result.get("duration"),
+            transcript=result.get("transcript"),
+        )
+        db.add(db_video)
+        try:
+            await db.commit()
+        except Exception:
+            await db.rollback()
+            try:
+                await storage.delete(result["storage_key"])
+            except UploadError:
+                logger.exception("Failed to clean up stored video after DB error")
+            raise
+        await db.refresh(db_video)
+        return _to_video(db_video, storage)
+    finally:
+        stream.close()
 
 
 @router.get("/{video_id}", response_model=VideoWithTranscript)
@@ -223,17 +286,18 @@ async def delete_video(
     user: Annotated[User, Depends(current_user)],
 ):
     db_video = await _get_owned_video_or_404(video_id, user, db)
-
-    storage = get_storage_service()
-    try:
-        await storage.delete(db_video.storage_key)
-    except UploadError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)
-        ) from exc
+    storage_key = db_video.storage_key
 
     await db.delete(db_video)
     await db.commit()
+
+    storage = get_storage_service()
+    try:
+        await storage.delete(storage_key)
+    except UploadError as exc:
+        logger.error(
+            "Failed to delete stored video %s after DB removal: %s", storage_key, exc
+        )
     return None
 
 

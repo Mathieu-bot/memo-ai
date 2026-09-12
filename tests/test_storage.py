@@ -1,4 +1,5 @@
 import asyncio
+from io import BytesIO
 
 import pytest
 from botocore.exceptions import ClientError
@@ -16,6 +17,7 @@ class FakeSettingsLocal:
     B2_KEY_ID = ""
     B2_APPLICATION_KEY = ""
     B2_BUCKET_NAME = ""
+    B2_REGION = ""
     STORAGE_DIR = "data/uploads"
 
 
@@ -24,6 +26,7 @@ class FakeSettingsB2:
     B2_KEY_ID = "key-id"
     B2_APPLICATION_KEY = "application-key"
     B2_BUCKET_NAME = "memoai-videos"
+    B2_REGION = "us-west-004"
     STORAGE_DIR = "data/uploads"
 
 
@@ -34,7 +37,7 @@ class FakeB2Client:
         self.objects = {}
 
     def put_object(self, **kwargs):
-        self.objects[kwargs["Key"]] = kwargs["Body"]
+        self.objects[kwargs["Key"]] = kwargs["Body"].read()
 
     def delete_object(self, **kwargs):
         self.objects.pop(kwargs["Key"], None)
@@ -47,6 +50,9 @@ class FakeB2Client:
                 "GetObject",
             )
         return {"Body": _Body(self.objects[key])}
+
+    def download_fileobj(self, **kwargs):
+        kwargs["Fileobj"].write(self.objects[kwargs["Key"]])
 
     def generate_presigned_url(self, operation_name, Params, ExpiresIn):
         return f"https://presigned.example.test/{Params['Key']}"
@@ -65,7 +71,7 @@ class _Body:
 
 def test_local_save_read_delete(tmp_path):
     storage = LocalStorageService(base_dir=tmp_path)
-    asyncio.run(storage.save("videos/a.mp4", b"content", "video/mp4"))
+    asyncio.run(storage.save("videos/a.mp4", BytesIO(b"content"), "video/mp4"))
     assert (tmp_path / "videos" / "a.mp4").read_bytes() == b"content"
     assert asyncio.run(storage.read("videos/a.mp4")) == b"content"
     assert storage.get_url("videos/a.mp4") is None
@@ -73,6 +79,14 @@ def test_local_save_read_delete(tmp_path):
 
     asyncio.run(storage.delete("videos/a.mp4"))
     assert not (tmp_path / "videos" / "a.mp4").exists()
+
+
+def test_local_read_to_file(tmp_path):
+    storage = LocalStorageService(base_dir=tmp_path)
+    asyncio.run(storage.save("videos/a.mp4", BytesIO(b"content"), "video/mp4"))
+    dest = tmp_path / "copy.mp4"
+    asyncio.run(storage.read_to_file("videos/a.mp4", dest))
+    assert dest.read_bytes() == b"content"
 
 
 def test_local_delete_missing_is_noop(tmp_path):
@@ -90,7 +104,7 @@ def test_local_read_missing_raises(tmp_path):
 def test_local_save_rejects_path_traversal(tmp_path):
     storage = LocalStorageService(base_dir=tmp_path)
     with pytest.raises(UploadError):
-        asyncio.run(storage.save("../escape.mp4", b"x", "video/mp4"))
+        asyncio.run(storage.save("../escape.mp4", BytesIO(b"x"), "video/mp4"))
 
 
 def test_factory_returns_local_fallback_without_b2(monkeypatch):
@@ -115,10 +129,11 @@ def test_b2_save_read_delete_and_url():
         key_id="key-id",
         application_key="key",
         bucket="memoai-videos",
+        region="us-west-004",
     )
     storage.client = FakeB2Client()
 
-    asyncio.run(storage.save("videos/a.mp4", b"content", "video/mp4"))
+    asyncio.run(storage.save("videos/a.mp4", BytesIO(b"content"), "video/mp4"))
     assert asyncio.run(storage.read("videos/a.mp4")) == b"content"
     assert (
         storage.get_url("videos/a.mp4") == "https://presigned.example.test/videos/a.mp4"
@@ -143,6 +158,9 @@ class _FailingB2Client:
     def get_object(self, **kwargs):
         raise _make_client_error("GetObject")
 
+    def download_fileobj(self, **kwargs):
+        raise _make_client_error("GetObject")
+
     def generate_presigned_url(self, operation_name, Params, ExpiresIn):
         raise _make_client_error("GetObject")
 
@@ -153,6 +171,7 @@ def _make_b2_service() -> B2StorageService:
         key_id="key-id",
         application_key="key",
         bucket="memoai-videos",
+        region="us-west-004",
     )
     storage.client = _FailingB2Client()
     return storage
@@ -160,7 +179,7 @@ def _make_b2_service() -> B2StorageService:
 
 def test_b2_save_error_raises():
     with pytest.raises(UploadError):
-        asyncio.run(_make_b2_service().save("k.mp4", b"x", "video/mp4"))
+        asyncio.run(_make_b2_service().save("k.mp4", BytesIO(b"x"), "video/mp4"))
 
 
 def test_b2_delete_error_raises():
@@ -171,6 +190,27 @@ def test_b2_delete_error_raises():
 def test_b2_read_error_raises():
     with pytest.raises(UploadError):
         asyncio.run(_make_b2_service().read("k.mp4"))
+
+
+def test_b2_read_to_file_success(tmp_path):
+    storage = B2StorageService(
+        endpoint_url="https://s3.example.com",
+        key_id="key-id",
+        application_key="key",
+        bucket="memoai-videos",
+        region="us-west-004",
+    )
+    storage.client = FakeB2Client()
+    asyncio.run(storage.save("videos/a.mp4", BytesIO(b"content"), "video/mp4"))
+
+    dest = tmp_path / "copy.mp4"
+    asyncio.run(storage.read_to_file("videos/a.mp4", dest))
+    assert dest.read_bytes() == b"content"
+
+
+def test_b2_read_to_file_error_raises(tmp_path):
+    with pytest.raises(UploadError):
+        asyncio.run(_make_b2_service().read_to_file("k.mp4", tmp_path / "x.mp4"))
 
 
 def test_b2_get_url_error_raises():
@@ -184,14 +224,14 @@ def test_local_save_oserror_raises(tmp_path, monkeypatch):
     def _boom_write(path, data):
         raise OSError("disk full")
 
-    monkeypatch.setattr(LocalStorageService, "_write", staticmethod(_boom_write))
+    monkeypatch.setattr(LocalStorageService, "_write_stream", staticmethod(_boom_write))
     with pytest.raises(UploadError):
-        asyncio.run(storage.save("videos/a.mp4", b"x", "video/mp4"))
+        asyncio.run(storage.save("videos/a.mp4", BytesIO(b"x"), "video/mp4"))
 
 
 def test_local_delete_oserror_raises(tmp_path, monkeypatch):
     storage = LocalStorageService(base_dir=tmp_path)
-    asyncio.run(storage.save("a.mp4", b"x", "video/mp4"))
+    asyncio.run(storage.save("a.mp4", BytesIO(b"x"), "video/mp4"))
 
     def _boom_unlink(*args, **kwargs):
         raise OSError("permission denied")

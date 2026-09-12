@@ -2,7 +2,6 @@ from datetime import UTC, datetime
 from uuid import uuid4
 
 from sqlalchemy import (
-    Boolean,
     Column,
     DateTime,
     ForeignKey,
@@ -29,6 +28,5 @@ class Video(Base):
         Uuid, ForeignKey("courses.id", ondelete="CASCADE"), nullable=False, index=True
     )
     created_at = Column(DateTime, default=lambda: datetime.now(UTC))
-    is_synchronized = Column(Boolean, default=True)
 
     course = relationship("Course", back_populates="videos")

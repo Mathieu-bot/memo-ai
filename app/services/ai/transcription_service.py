@@ -3,8 +3,8 @@ import os
 import shutil
 import subprocess
 import tempfile
+from typing import BinaryIO
 
-import httpx
 from groq import Groq
 
 from app.config import get_settings
@@ -20,44 +20,16 @@ class TranscriptionService:
     def __init__(self, api_key: str):
         self.client = Groq(api_key=api_key)
 
-    def transcribe_url(self, url: str) -> str:
-        temp_path = self._download(url)
+    def transcribe_file(self, file_obj: BinaryIO, suffix: str = ".mp4") -> str:
+        """Transcribe a streamed file (written to a temp file first)."""
+        with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as temp_file:
+            shutil.copyfileobj(file_obj, temp_file)
+            temp_path = temp_file.name
         try:
             return self.transcribe_path(temp_path)
         finally:
             if os.path.exists(temp_path):
                 os.unlink(temp_path)
-
-    def transcribe_bytes(self, data: bytes, suffix: str = ".mp4") -> str:
-        """Transcribe content already in memory (no download round-trip)."""
-        temp_path: str | None = None
-        try:
-            with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as temp_file:
-                temp_file.write(data)
-                temp_path = temp_file.name
-            return self.transcribe_path(temp_path)
-        finally:
-            if temp_path and os.path.exists(temp_path):
-                os.unlink(temp_path)
-
-    def _download(self, url: str) -> str:
-        tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".mp4")
-        tmp_path = tmp.name
-        tmp.close()
-        try:
-            with httpx.stream(
-                "GET", url, follow_redirects=True, timeout=300
-            ) as response:
-                response.raise_for_status()
-                with open(tmp_path, "wb") as f:
-                    for chunk in response.iter_bytes():
-                        f.write(chunk)
-            return tmp_path
-        except Exception as exc:
-            if os.path.exists(tmp_path):
-                os.unlink(tmp_path)
-            logger.error("Failed to download %s: %s", url, exc)
-            raise TranscriptionError() from exc
 
     def transcribe_path(self, file_path: str) -> str:
         file_size_mb = os.path.getsize(file_path) / (1024 * 1024)
@@ -81,38 +53,31 @@ class TranscriptionService:
             raise TranscriptionError() from exc
 
     def _transcribe_in_chunks(self, file_path: str) -> str:
-        chunks = self._split_audio(file_path)
+        chunks_dir = tempfile.mkdtemp(prefix="memoai_audio_")
         transcripts = []
         try:
+            chunks = self._split_audio(file_path, chunks_dir)
             for chunk_path in chunks:
                 transcripts.append(self._transcribe_file(chunk_path))
-                os.unlink(chunk_path)
         finally:
-            for chunk_path in chunks:
-                if os.path.exists(chunk_path):
-                    os.unlink(chunk_path)
+            shutil.rmtree(chunks_dir, ignore_errors=True)
         return "\n".join(t for t in transcripts if t)
 
-    def _split_audio(self, file_path: str) -> list[str]:
-        tmp_dir = tempfile.mkdtemp(prefix="memoai_audio_")
+    def _split_audio(self, file_path: str, chunks_dir: str) -> list[str]:
         segments = []
-        try:
-            duration = self._get_duration(file_path)
-            if not duration:
-                raise TranscriptionError("Could not determine audio duration")
-            segment_duration = self._estimate_segment_duration(file_path, duration)
-            start = 0.0
-            index = 0
-            while start < duration:
-                segment_path = os.path.join(tmp_dir, f"segment_{index}.mp3")
-                self._extract_segment(file_path, segment_path, start, segment_duration)
-                segments.append(segment_path)
-                start += segment_duration
-                index += 1
-            return segments
-        except Exception:
-            shutil.rmtree(tmp_dir, ignore_errors=True)
-            raise TranscriptionError("Failed to split audio into chunks") from None
+        duration = self._get_duration(file_path)
+        if not duration:
+            raise TranscriptionError("Could not determine audio duration")
+        segment_duration = self._estimate_segment_duration(file_path, duration)
+        start = 0.0
+        index = 0
+        while start < duration:
+            segment_path = os.path.join(chunks_dir, f"segment_{index}.mp3")
+            self._extract_segment(file_path, segment_path, start, segment_duration)
+            segments.append(segment_path)
+            start += segment_duration
+            index += 1
+        return segments
 
     def _get_duration(self, file_path: str) -> float | None:
         cmd = [

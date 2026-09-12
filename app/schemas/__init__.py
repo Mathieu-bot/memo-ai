@@ -10,13 +10,7 @@ from app.schemas.question import (
 )
 from app.schemas.quiz import Quiz, QuizCreate, QuizUpdate, QuizWithQuestions
 from app.schemas.user import UserCreate, UserRead, UserUpdate
-from app.schemas.video import (
-    Video,
-    VideoCreate,
-    VideoUpdate,
-    VideoUpload,
-    VideoWithTranscript,
-)
+from app.schemas.video import Video, VideoUpdate, VideoWithTranscript
 
 __all__ = [
     "Course",
@@ -40,9 +34,7 @@ __all__ = [
     "NoteUpdate",
     "NoteWithSummary",
     "Video",
-    "VideoCreate",
     "VideoUpdate",
-    "VideoUpload",
     "VideoWithTranscript",
     "UserCreate",
     "UserRead",

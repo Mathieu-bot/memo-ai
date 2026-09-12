@@ -1,9 +1,10 @@
 import asyncio
 import logging
 import os
+import shutil
 import subprocess
 import tempfile
-from typing import Any
+from typing import Any, BinaryIO
 
 from app.exceptions import TranscriptionError
 from app.services.ai.transcription_service import TranscriptionService
@@ -24,43 +25,59 @@ class VideoService:
     async def process_upload(
         self,
         key: str,
-        file_bytes: bytes,
+        file_obj: BinaryIO,
         content_type: str,
         generate_transcript: bool,
     ) -> dict[str, Any]:
-        await self.storage.save(key, file_bytes, content_type)
-        duration = await asyncio.to_thread(self._probe_duration, file_bytes)
-        result: dict[str, Any] = {
+        file_obj.seek(0)
+        duration = await asyncio.to_thread(self._probe_duration, file_obj)
+
+        file_obj.seek(0)
+        await self.storage.save(key, file_obj, content_type)
+
+        transcript = None
+        if generate_transcript:
+            file_obj.seek(0)
+            transcript = await self._generate_transcript(file_obj)
+
+        return {
             "storage_key": key,
             "duration": duration,
-            "transcript": None,
+            "transcript": transcript,
         }
 
-        if generate_transcript:
-            result["transcript"] = await self._generate_transcript(file_bytes)
-
-        return result
-
     async def regenerate_transcript(self, key: str) -> str:
-        data = await self.storage.read(key)
-        return await self._generate_transcript(data)
+        local_path = self.storage.path(key)
+        if local_path is not None and local_path.exists():
+            with open(local_path, "rb") as f:
+                return await self._generate_transcript(f)
 
-    async def _generate_transcript(self, file_bytes: bytes) -> str:
+        fd, tmp_path = tempfile.mkstemp(suffix=".mp4")
+        os.close(fd)
+        try:
+            await self.storage.read_to_file(key, tmp_path)
+            with open(tmp_path, "rb") as f:
+                return await self._generate_transcript(f)
+        finally:
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
+
+    async def _generate_transcript(self, file_obj: BinaryIO) -> str:
         if self.transcription is None:
             return "Transcription not available"
         try:
-            return await asyncio.to_thread(
-                self.transcription.transcribe_bytes, file_bytes
-            )
+            return await asyncio.to_thread(self.transcription.transcribe_file, file_obj)
         except TranscriptionError:
             logger.warning("Transcription failed for uploaded video")
             return "Transcription not available"
 
-    def _probe_duration(self, file_bytes: bytes) -> int | None:
+    def _probe_duration(self, file_obj: BinaryIO) -> int | None:
         temp_path: str | None = None
         try:
             with tempfile.NamedTemporaryFile(delete=False, suffix=".mp4") as temp_file:
-                temp_file.write(file_bytes)
+                shutil.copyfileobj(file_obj, temp_file)
                 temp_path = temp_file.name
 
             cmd = [

@@ -1,5 +1,7 @@
 import asyncio
 import logging
+from pathlib import Path
+from typing import BinaryIO
 
 import boto3
 from botocore.config import Config as BotoConfig
@@ -19,11 +21,10 @@ READ_RETRY_BASE_DELAY_SECONDS = 0.3
 
 
 class B2StorageService(StorageService):
-    """Stores files in a private Backblaze B2 bucket.
+    """Backblaze B2 storage through its S3-compatible API.
 
-    Uses the S3-compatible API so the same code also works with other
-    S3-compatible providers (Cloudflare R2, MinIO, ...) by swapping the
-    endpoint URL.
+    Works with any S3-compatible provider (Cloudflare R2, MinIO, ...) by
+    swapping the endpoint URL.
     """
 
     def __init__(
@@ -32,7 +33,7 @@ class B2StorageService(StorageService):
         key_id: str,
         application_key: str,
         bucket: str,
-        region: str = "us-west-004",
+        region: str | None,
     ):
         self.client = boto3.client(
             "s3",
@@ -48,7 +49,7 @@ class B2StorageService(StorageService):
         )
         self.bucket = bucket
 
-    async def save(self, key: str, data: bytes, content_type: str) -> None:
+    async def save(self, key: str, data: BinaryIO, content_type: str) -> None:
         try:
             await asyncio.to_thread(
                 self.client.put_object,
@@ -96,6 +97,31 @@ class B2StorageService(StorageService):
             return response["Body"].read()
         finally:
             response["Body"].close()
+
+    async def read_to_file(self, key: str, dest_path: str | Path) -> None:
+        for attempt in range(READ_ATTEMPTS):
+            try:
+                await asyncio.to_thread(self._download_to_file, key, dest_path)
+                return
+            except (ClientError, BotoCoreError) as exc:
+                if attempt < READ_ATTEMPTS - 1:
+                    delay = READ_RETRY_BASE_DELAY_SECONDS * (2**attempt)
+                    logger.warning(
+                        "B2 read failed for %s (attempt %d/%d), retrying in %.1fs: %s",
+                        key,
+                        attempt + 1,
+                        READ_ATTEMPTS,
+                        delay,
+                        exc,
+                    )
+                    await asyncio.sleep(delay)
+                    continue
+                logger.error("B2 read failed for %s: %s", key, exc)
+                raise UploadError("Failed to read video from storage") from exc
+
+    def _download_to_file(self, key: str, dest_path: str | Path) -> None:
+        with open(dest_path, "wb") as f:
+            self.client.download_fileobj(Bucket=self.bucket, Key=key, Fileobj=f)
 
     def get_url(self, key: str) -> str | None:
         try:

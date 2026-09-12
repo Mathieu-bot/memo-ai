@@ -1,6 +1,8 @@
 import asyncio
 import logging
+import shutil
 from pathlib import Path
+from typing import BinaryIO
 
 from app.exceptions import UploadError
 from app.services.storage.base import StorageService
@@ -9,11 +11,7 @@ logger = logging.getLogger(__name__)
 
 
 class LocalStorageService(StorageService):
-    """Stores files on the local filesystem.
-
-    Used in development, tests and CI: it requires no external credentials
-    and is the default fallback when Backblaze B2 is not configured.
-    """
+    """Stores files on the local filesystem (dev/test fallback storage)."""
 
     def __init__(self, base_dir: str | Path = "data/uploads"):
         self.base_dir = Path(base_dir)
@@ -24,18 +22,20 @@ class LocalStorageService(StorageService):
             raise UploadError("Invalid storage key")
         return path
 
-    async def save(self, key: str, data: bytes, content_type: str) -> None:
+    async def save(self, key: str, data: BinaryIO, content_type: str) -> None:
         path = self._resolve(key)
         try:
-            await asyncio.to_thread(self._write, path, data)
+            await asyncio.to_thread(self._write_stream, path, data)
         except OSError as exc:
             logger.error("Local storage save failed for %s: %s", key, exc)
             raise UploadError("Failed to upload video to storage") from exc
 
     @staticmethod
-    def _write(path: Path, data: bytes) -> None:
+    def _write_stream(path: Path, data: BinaryIO) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_bytes(data)
+        with open(path, "wb") as dst:
+            while chunk := data.read(1024 * 1024):
+                dst.write(chunk)
 
     async def delete(self, key: str) -> None:
         path = self._resolve(key)
@@ -49,6 +49,14 @@ class LocalStorageService(StorageService):
         path = self._resolve(key)
         try:
             return await asyncio.to_thread(path.read_bytes)
+        except OSError as exc:
+            logger.error("Local storage read failed for %s: %s", key, exc)
+            raise UploadError("Failed to read video from storage") from exc
+
+    async def read_to_file(self, key: str, dest_path: str | Path) -> None:
+        path = self._resolve(key)
+        try:
+            await asyncio.to_thread(shutil.copyfile, path, dest_path)
         except OSError as exc:
             logger.error("Local storage read failed for %s: %s", key, exc)
             raise UploadError("Failed to read video from storage") from exc
