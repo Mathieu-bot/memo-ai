@@ -12,19 +12,28 @@ from fastapi_users.authentication import (
 )
 from fastapi_users_db_sqlalchemy import SQLAlchemyUserDatabase
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings
 from app.dependencies import get_db
 from app.models import User
+from app.services.email_service import (
+    send_password_reset_email,
+    send_verification_email,
+)
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
 
 
 class UserManager(UUIDIDMixin, BaseUserManager[User, UUID]):
-    reset_password_token_secret = settings.JWT_SECRET
-    verification_token_secret = settings.JWT_SECRET
+    reset_password_token_secret = (
+        settings.RESET_PASSWORD_TOKEN_SECRET or settings.JWT_SECRET
+    )
+    verification_token_secret = (
+        settings.VERIFICATION_TOKEN_SECRET or settings.JWT_SECRET
+    )
 
     async def create(
         self,
@@ -38,7 +47,12 @@ class UserManager(UUIDIDMixin, BaseUserManager[User, UUID]):
         )
         if result.first() is not None:
             raise exceptions.UserAlreadyExists()
-        return await super().create(user_create, safe=safe, request=request)
+        try:
+            return await super().create(user_create, safe=safe, request=request)
+        except IntegrityError:
+            # Concurrent duplicate (username or email) racing past the pre-checks.
+            await self.user_db.session.rollback()
+            raise exceptions.UserAlreadyExists() from None
 
     async def on_after_register(self, user: User, request: Request | None = None):
         logger.info("User %s successfully registered", user.email)
@@ -46,20 +60,12 @@ class UserManager(UUIDIDMixin, BaseUserManager[User, UUID]):
     async def on_after_request_verify(
         self, user: User, token: str, request: Request | None = None
     ):
-        logger.info(
-            "Verification token for %s (in production, email it): %s",
-            user.email,
-            token,
-        )
+        await send_verification_email(user.email, token)
 
     async def on_after_forgot_password(
         self, user: User, token: str, request: Request | None = None
     ):
-        logger.info(
-            "Password reset token for %s (in production, email it): %s",
-            user.email,
-            token,
-        )
+        await send_password_reset_email(user.email, token)
 
 
 async def get_user_db(
