@@ -38,6 +38,11 @@ def test_create_quiz(auth_client):
     assert data["course_id"] == course["id"]
 
 
+def test_list_quizzes_limits_enforced(auth_client):
+    response = auth_client.get("/quizzes/", params={"limit": 0})
+    assert response.status_code == 422
+
+
 def test_create_quiz_invalid_course(auth_client):
     response = auth_client.post(
         "/quizzes/", json={"title": "Q", "course_id": MISSING_ID}

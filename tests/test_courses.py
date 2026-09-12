@@ -2,16 +2,18 @@ import asyncio
 from uuid import uuid4
 
 import pytest
+from fastapi import HTTPException
 
 from app.exceptions import NotFoundError
 from app.routers.courses import (
+    add_course_member,
     create_course,
     delete_course,
     get_course,
     get_courses,
     update_course,
 )
-from app.schemas import CourseCreate, CourseUpdate
+from app.schemas import CourseCreate, CourseMemberCreate, CourseUpdate
 from tests.conftest import TestingSessionLocal, _db_user
 
 MISSING_ID = "00000000-0000-0000-0000-000000000000"
@@ -80,6 +82,61 @@ def test_delete_course_not_found(auth_client):
     assert response.status_code == 404
 
 
+def test_delete_course_removes_uploaded_videos(auth_client, tmp_path, monkeypatch):
+    import app.routers.courses as courses_router
+    import app.routers.videos as videos_router
+    from app.services.storage import LocalStorageService
+
+    course = auth_client.post("/courses/", json={"title": "Math"}).json()
+    storage = LocalStorageService(base_dir=tmp_path)
+    # Call sites resolve get_storage_service from their own module globals.
+    monkeypatch.setattr(videos_router, "get_storage_service", lambda: storage)
+    monkeypatch.setattr(courses_router, "get_storage_service", lambda: storage)
+
+    upload = auth_client.post(
+        "/videos/upload",
+        data={
+            "title": "Intro",
+            "course_id": str(course["id"]),
+            "generate_transcript": "false",
+        },
+        files={
+            "file": (
+                "intro.mp4",
+                b"\x00\x00\x00\x18ftypmp42" + b"\x00\x00\x00\x00",
+                "video/mp4",
+            )
+        },
+    )
+    assert upload.status_code == 201, upload.text
+    course_dir = tmp_path / "course_videos" / str(course["id"])
+    assert len(list(course_dir.glob("*.mp4"))) == 1
+
+    response = auth_client.delete(f"/courses/{course['id']}")
+    assert response.status_code == 204
+    assert list(course_dir.glob("*.mp4")) == []
+
+
+def test_add_course_member_duplicate_returns_409(auth_client):
+    course = auth_client.post("/courses/", json={"title": "Math"}).json()
+    bob = auth_client.post(
+        "/auth/register",
+        json={
+            "email": "bob@example.com",
+            "password": "password123",
+            "username": "bob",
+        },
+    ).json()
+    first = auth_client.post(
+        f"/courses/{course['id']}/members", json={"user_id": bob["id"]}
+    )
+    assert first.status_code == 201
+    second = auth_client.post(
+        f"/courses/{course['id']}/members", json={"user_id": bob["id"]}
+    )
+    assert second.status_code == 409
+
+
 # --- Direct handler-call tests ----------------------------------------------
 # These invoke the handlers in-process (no HTTP), which coverage measures fully.
 def _run(fn, *args, **kwargs):
@@ -142,3 +199,48 @@ def test_direct_delete_course():
 def test_direct_delete_course_not_found():
     with pytest.raises(NotFoundError):
         _run(delete_course, uuid4(), user=_db_user())
+
+
+def test_direct_add_course_member_owner_conflict():
+    user = _db_user()
+    course_id = _run(create_course, CourseCreate(title="Math"), user=user).id
+    with pytest.raises(HTTPException) as exc_info:
+        _run(
+            add_course_member,
+            course_id,
+            CourseMemberCreate(user_id=user.id),
+            user=user,
+        )
+    assert exc_info.value.status_code == 400
+
+
+def test_direct_add_course_member_duplicate():
+    user = _db_user()
+    other = _db_user(email="other@example.com", username="other")
+    course_id = _run(create_course, CourseCreate(title="Math"), user=user).id
+    _run(
+        add_course_member,
+        course_id,
+        CourseMemberCreate(user_id=other.id),
+        user=user,
+    )
+    with pytest.raises(HTTPException) as exc_info:
+        _run(
+            add_course_member,
+            course_id,
+            CourseMemberCreate(user_id=other.id),
+            user=user,
+        )
+    assert exc_info.value.status_code == 409
+
+
+def test_direct_add_course_member_unknown_user():
+    user = _db_user()
+    course_id = _run(create_course, CourseCreate(title="Math"), user=user).id
+    with pytest.raises(NotFoundError):
+        _run(
+            add_course_member,
+            course_id,
+            CourseMemberCreate(user_id=uuid4()),
+            user=user,
+        )

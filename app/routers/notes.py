@@ -1,7 +1,7 @@
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -11,8 +11,10 @@ from app.access import (
     get_course_or_404,
 )
 from app.auth import current_user
+from app.config import get_settings
 from app.dependencies import get_db
 from app.exceptions import AIServiceError, NotFoundError
+from app.limiter import limiter
 from app.models import Course as CourseModel
 from app.models import Note as NoteModel
 from app.models import User
@@ -20,6 +22,7 @@ from app.schemas import Note, NoteCreate, NoteUpdate, NoteWithSummary
 from app.services.ai import FlashcardService, SummaryService, get_ai_provider
 
 router = APIRouter(prefix="/notes", tags=["notes"])
+settings = get_settings()
 
 
 async def _get_accessible_note_or_404(
@@ -56,12 +59,22 @@ async def _generate_summary(content: str) -> str:
     return await summary_service.summarize(content)
 
 
+async def _set_summary_safely(db: AsyncSession, note: NoteModel) -> None:
+    try:
+        note.summary = await _generate_summary(note.content)
+    except AIServiceError:
+        note.summary = None
+    await db.commit()
+    await db.refresh(note)
+
+
 @router.get("/", response_model=list[Note])
 async def get_notes(
+    request: Request,
     db: Annotated[AsyncSession, Depends(get_db)],
     user: Annotated[User, Depends(current_user)],
-    skip: int = 0,
-    limit: int = 100,
+    skip: Annotated[int, Query(ge=0)] = 0,
+    limit: Annotated[int, Query(ge=1, le=100)] = 100,
     title: str | None = None,
     course_id: UUID | None = None,
 ):
@@ -80,7 +93,9 @@ async def get_notes(
 
 
 @router.post("/", response_model=Note, status_code=status.HTTP_201_CREATED)
+@limiter.limit(settings.RATE_LIMIT_AI)
 async def create_note(
+    request: Request,
     note: NoteCreate,
     db: Annotated[AsyncSession, Depends(get_db)],
     user: Annotated[User, Depends(current_user)],
@@ -90,16 +105,11 @@ async def create_note(
 
     db_note = NoteModel(**note.model_dump())
     db.add(db_note)
-    await db.flush()
-
-    if generate_summary:
-        try:
-            db_note.summary = await _generate_summary(note.content)
-        except AIServiceError:
-            db_note.summary = None
-
     await db.commit()
     await db.refresh(db_note)
+
+    if generate_summary:
+        await _set_summary_safely(db, db_note)
     return db_note
 
 
@@ -128,15 +138,12 @@ async def update_note(
     update_data = note.model_dump(exclude_unset=True)
     for key, value in update_data.items():
         setattr(db_note, key, value)
-
-    if regenerate_summary or "content" in update_data:
-        try:
-            db_note.summary = await _generate_summary(db_note.content)
-        except AIServiceError:
-            db_note.summary = None
-
     await db.commit()
     await db.refresh(db_note)
+
+    if regenerate_summary or "content" in update_data:
+        await _set_summary_safely(db, db_note)
+
     return db_note
 
 
@@ -153,7 +160,9 @@ async def delete_note(
 
 
 @router.post("/{note_id}/summarize", response_model=Note)
+@limiter.limit(settings.RATE_LIMIT_AI)
 async def summarize_note(
+    request: Request,
     note_id: UUID,
     db: Annotated[AsyncSession, Depends(get_db)],
     user: Annotated[User, Depends(current_user)],
@@ -161,24 +170,26 @@ async def summarize_note(
     db_note = await _get_owned_note_or_404(note_id, user, db)
 
     try:
-        db_note.summary = await _generate_summary(db_note.content)
+        summary = await _generate_summary(db_note.content)
     except AIServiceError as exc:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="AI summarization failed",
         ) from exc
-
+    db_note.summary = summary
     await db.commit()
     await db.refresh(db_note)
     return db_note
 
 
 @router.post("/{note_id}/generate-flashcards", status_code=status.HTTP_200_OK)
+@limiter.limit(settings.RATE_LIMIT_AI)
 async def generate_flashcards(
+    request: Request,
     note_id: UUID,
     db: Annotated[AsyncSession, Depends(get_db)],
     user: Annotated[User, Depends(current_user)],
-    num_cards: int = 10,
+    num_cards: Annotated[int, Query(ge=1, le=25)] = 10,
 ):
     db_note = await _get_accessible_note_or_404(note_id, user, db)
 

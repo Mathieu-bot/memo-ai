@@ -1,4 +1,5 @@
 import asyncio
+import inspect
 from uuid import uuid4
 
 import pytest
@@ -16,7 +17,7 @@ from app.routers.notes import (
     update_note,
 )
 from app.schemas import CourseCreate, NoteCreate, NoteUpdate
-from tests.conftest import TestingSessionLocal, _db_user
+from tests.conftest import TestingSessionLocal, _db_user, make_request
 
 MISSING_ID = "00000000-0000-0000-0000-000000000000"
 
@@ -87,6 +88,30 @@ def test_delete_note(auth_client):
     assert auth_client.get(f"/notes/{note_id}").status_code == 404
 
 
+def test_create_note_content_too_long(auth_client):
+    course = auth_client.post("/courses/", json={"title": "Math"}).json()
+    response = auth_client.post(
+        "/notes/",
+        json={
+            "title": "N",
+            "content": "x" * 100_001,
+            "course_id": course["id"],
+        },
+    )
+    assert response.status_code == 422
+
+
+def test_update_note_null_title_rejected(auth_client):
+    response, _ = _create_note(auth_client)
+    result = auth_client.put(f"/notes/{response.json()['id']}", json={"title": None})
+    assert result.status_code == 422
+
+
+def test_list_notes_limits_enforced(auth_client):
+    response = auth_client.get("/notes/", params={"limit": 0})
+    assert response.status_code == 422
+
+
 # --- Direct handler-call tests ----------------------------------------------
 # These invoke the handlers in-process (no HTTP), which coverage measures fully.
 class FakeProvider:
@@ -108,7 +133,11 @@ class FailingProvider:
 def _run(fn, *args, **kwargs):
     async def _go():
         async with TestingSessionLocal() as session:
-            return await fn(*args, db=session, **kwargs)
+            call_args = list(args)
+            params = list(inspect.signature(fn).parameters)
+            if params and params[0] == "request":
+                call_args.insert(0, make_request())
+            return await fn(*call_args, db=session, **kwargs)
 
     return asyncio.run(_go())
 

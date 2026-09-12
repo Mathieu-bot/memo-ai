@@ -1,17 +1,20 @@
+import logging
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.access import get_course_or_404, list_accessible_courses
 from app.auth import current_user
 from app.dependencies import get_db
-from app.exceptions import NotFoundError
+from app.exceptions import NotFoundError, UploadError
 from app.models import Course as CourseModel
 from app.models import CourseMember as CourseMemberModel
 from app.models import User
+from app.models import Video as VideoModel
 from app.models.course_member import ROLE_MEMBER, ROLE_OWNER
 from app.schemas import (
     Course,
@@ -20,7 +23,9 @@ from app.schemas import (
     CourseMemberCreate,
     CourseUpdate,
 )
+from app.services.storage import get_storage_service
 
+logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/courses", tags=["courses"])
 
 
@@ -28,8 +33,8 @@ router = APIRouter(prefix="/courses", tags=["courses"])
 async def get_courses(
     db: Annotated[AsyncSession, Depends(get_db)],
     user: Annotated[User, Depends(current_user)],
-    skip: int = 0,
-    limit: int = 100,
+    skip: Annotated[int, Query(ge=0)] = 0,
+    limit: Annotated[int, Query(ge=1, le=100)] = 100,
 ):
     return await list_accessible_courses(db, user, skip, limit)
 
@@ -81,6 +86,23 @@ async def delete_course(
     user: Annotated[User, Depends(current_user)],
 ):
     db_course = await get_course_or_404(db, user, course_id, write=True)
+
+    result = await db.execute(
+        select(VideoModel.storage_key).where(VideoModel.course_id == course_id)
+    )
+    storage_keys = [row[0] for row in result.all()]
+
+    storage = get_storage_service()
+    for key in storage_keys:
+        try:
+            await storage.delete(key)
+        except UploadError as exc:
+            logger.error(
+                "Failed to delete stored video %s for course %s: %s",
+                key,
+                course_id,
+                exc,
+            )
 
     await db.delete(db_course)
     await db.commit()
@@ -146,7 +168,15 @@ async def add_course_member(
         course_id=course_id, user_id=member.user_id, role=ROLE_MEMBER
     )
     db.add(db_member)
-    await db.commit()
+    try:
+        await db.commit()
+    except IntegrityError as exc:
+        # Concurrent duplicate insert (unique constraint on course/user).
+        await db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="User is already a member of this course",
+        ) from exc
     await db.refresh(db_member)
     return db_member
 
