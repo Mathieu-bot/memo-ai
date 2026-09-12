@@ -3,12 +3,16 @@ import os
 import tempfile
 from uuid import UUID, uuid4
 
-os.environ.setdefault("JWT_SECRET", "test-secret")
+os.environ.setdefault(
+    "JWT_SECRET", "a-very-long-randomly-chosen-dev-only-jwt-secret-for-memoai-tests"
+)
+os.environ.setdefault("RATE_LIMITING_ENABLED", "false")
 
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+from starlette.requests import Request
 
 import app.models  # noqa: F401
 from app.database import Base
@@ -118,3 +122,19 @@ def clean_db():
             await session.commit()
 
     asyncio.run(_clean())
+
+
+def make_request(method: str = "POST", path: str = "/test") -> Request:
+    """Minimal starlette Request for direct handler calls (rate limiter compat)."""
+    return Request(
+        {
+            "type": "http",
+            "method": method,
+            "path": path,
+            "headers": [],
+            "query_string": b"",
+            "client": ("127.0.0.1", 12345),
+            "server": ("testserver", 80),
+            "scheme": "http",
+        }
+    )
