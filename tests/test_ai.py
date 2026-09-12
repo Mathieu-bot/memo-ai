@@ -1,4 +1,5 @@
 import asyncio
+import inspect
 from uuid import UUID, uuid4
 
 import pytest
@@ -14,7 +15,7 @@ from app.services.ai import (
     SummaryService,
 )
 from app.services.ai.gemini import GeminiProvider, get_ai_provider
-from tests.conftest import TestingSessionLocal, _db_user
+from tests.conftest import TestingSessionLocal, _db_user, make_request
 
 MISSING_ID = "00000000-0000-0000-0000-000000000000"
 
@@ -53,6 +54,30 @@ def test_generate_quiz_without_api_key(auth_client, monkeypatch):
     course = auth_client.post("/courses/", json={"title": "Math"}).json()
     response = auth_client.post(f"/ai/generate-quiz/{course['id']}")
     assert response.status_code == 503
+
+
+def test_generate_quiz_invalid_ai_output_returns_502(auth_client, monkeypatch):
+    class GarbageProvider:
+        async def generate_structured_json(self, prompt, system_prompt=""):
+            return "not even a dict"
+
+    monkeypatch.setattr("app.routers.ai.get_ai_provider", lambda: GarbageProvider())
+    course = auth_client.post("/courses/", json={"title": "Math"}).json()
+    response = auth_client.post(f"/ai/generate-quiz/{course['id']}")
+    assert response.status_code == 502
+
+
+def test_generate_quiz_num_questions_bounds(auth_client, monkeypatch):
+    class UnusedProvider:
+        async def generate_structured_json(self, prompt, system_prompt=""):
+            raise AssertionError("AI must not be called")
+
+    monkeypatch.setattr("app.routers.ai.get_ai_provider", lambda: UnusedProvider())
+    course = auth_client.post("/courses/", json={"title": "Math"}).json()
+    response = auth_client.post(
+        f"/ai/generate-quiz/{course['id']}", params={"num_questions": 0}
+    )
+    assert response.status_code == 422
 
 
 def test_summary_uses_grounded_system_prompt():
@@ -204,7 +229,8 @@ async def _noop():
 def test_gemini_falls_back_to_next_model_when_quota_exhausted(monkeypatch):
     class QuotaError(RuntimeError):
         code = 429
-        error = {"status": "RESOURCE_EXHAUSTED", "message": "quota"}
+        status = "RESOURCE_EXHAUSTED"
+        details = {"error": {"status": "RESOURCE_EXHAUSTED", "message": "quota"}}
 
     calls = []
 
@@ -281,7 +307,11 @@ class _FailingQuizProvider:
 def _run(fn, *args, **kwargs):
     async def _go():
         async with TestingSessionLocal() as session:
-            return await fn(*args, db=session, **kwargs)
+            call_args = list(args)
+            params = list(inspect.signature(fn).parameters)
+            if params and params[0] == "request":
+                call_args.insert(0, make_request())
+            return await fn(*call_args, db=session, **kwargs)
 
     return asyncio.run(_go())
 

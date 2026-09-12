@@ -50,7 +50,9 @@ class QuizGenerator:
         self.provider = provider
 
     @staticmethod
-    def _is_valid(data: dict[str, Any]) -> bool:
+    def _is_valid(data: Any) -> bool:
+        if not isinstance(data, dict):
+            return False
         questions = data.get("questions")
         return (
             bool(data.get("title")) and isinstance(questions, list) and bool(questions)

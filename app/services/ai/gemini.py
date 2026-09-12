@@ -58,14 +58,23 @@ class GeminiProvider(AIProvider):
 
     @staticmethod
     def _is_model_unavailable(exc: Exception) -> bool:
-        """Quota exhaustion (429 RESOURCE_EXHAUSTED) and retired models (404)
-        are not cured by retrying the same model, so a fallback is needed."""
-        code = getattr(exc, "code", None)
-        if code == 404:
+        """Quota exhaustion (RESOURCE_EXHAUSTED) and retired models (NOT_FOUND)
+        are not cured by retrying the same model, so a fallback is needed.
+        Reads the real attributes of google.genai APIError."""
+        status = getattr(exc, "status", None)
+        if status in ("RESOURCE_EXHAUSTED", "NOT_FOUND"):
             return True
-        if code == 429:
-            error = getattr(exc, "error", None) or {}
-            return error.get("status") == "RESOURCE_EXHAUSTED"
+        if status is None:
+            code = getattr(exc, "code", None)
+            if code == 404:
+                return True
+            if code == 429:
+                details = getattr(exc, "details", None) or {}
+                if (
+                    isinstance(details, dict)
+                    and details.get("status") == "RESOURCE_EXHAUSTED"
+                ):
+                    return True
         return False
 
     async def _call_with_retry(self, func, *args, **kwargs) -> Any:
