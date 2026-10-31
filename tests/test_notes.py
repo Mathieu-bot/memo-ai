@@ -294,8 +294,39 @@ def test_direct_generate_flashcards(monkeypatch):
     note_id = _create_note_direct(user, course_id)
     monkeypatch.setattr("app.routers.notes.get_ai_provider", lambda: FakeProvider())
     result = _run(generate_flashcards, note_id, user=user, num_cards=2)
-    assert result["flashcards"] == [{"front": "Front", "back": "Back"}]
-    assert result["note_id"] == note_id
+    assert [(c.front, c.back) for c in result.flashcards] == [("Front", "Back")]
+    assert result.note_id == note_id
+
+
+def test_generated_flashcards_are_persisted_and_listed(auth_client, monkeypatch):
+    class Provider:
+        async def generate_structured_json(self, prompt, system_prompt=""):
+            return {
+                "flashcards": [
+                    {"front": "What is ATP?", "back": "Cell energy currency"},
+                    {"front": "", "back": "dropped: empty front"},
+                    "dropped: not a card",
+                ]
+            }
+
+    monkeypatch.setattr("app.routers.notes.get_ai_provider", lambda: Provider())
+    response, _ = _create_note(auth_client)
+    note_id = response.json()["id"]
+
+    created = auth_client.post(f"/notes/{note_id}/generate-flashcards")
+    listed = auth_client.get(f"/notes/{note_id}/flashcards")
+
+    assert created.status_code == 201
+    assert len(created.json()["flashcards"]) == 1
+    assert listed.status_code == 200
+    assert [(c["front"], c["back"]) for c in listed.json()] == [
+        ("What is ATP?", "Cell energy currency")
+    ]
+
+
+def test_list_flashcards_of_inaccessible_note_returns_404(auth_client):
+    response = auth_client.get("/notes/00000000-0000-0000-0000-000000000000/flashcards")
+    assert response.status_code == 404
 
 
 def test_direct_generate_flashcards_ai_failure(monkeypatch):

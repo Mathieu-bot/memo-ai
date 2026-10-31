@@ -6,6 +6,7 @@ import pytest
 from fastapi import HTTPException
 
 from app.exceptions import AIServiceError, NotFoundError
+from app.models import Video as VideoModel
 from app.routers.ai import generate_quiz
 from app.routers.courses import create_course
 from app.schemas import CourseCreate
@@ -15,6 +16,7 @@ from app.services.ai import (
     SummaryService,
 )
 from app.services.ai.gemini import GeminiProvider, get_ai_provider
+from app.services.course_material import collect_course_material
 from tests.conftest import TestingSessionLocal, _db_user, make_request
 
 MISSING_ID = "00000000-0000-0000-0000-000000000000"
@@ -51,7 +53,9 @@ def test_generate_quiz_without_api_key(auth_client, monkeypatch):
         raise AIServiceError("GEMINI_API_KEY is not configured")
 
     monkeypatch.setattr("app.routers.ai.get_ai_provider", _no_key_provider)
-    course = auth_client.post("/courses/", json={"title": "Math"}).json()
+    course = auth_client.post(
+        "/courses/", json={"title": "Math", "description": "Algebra basics"}
+    ).json()
     response = auth_client.post(f"/ai/generate-quiz/{course['id']}")
     assert response.status_code == 503
 
@@ -62,7 +66,9 @@ def test_generate_quiz_invalid_ai_output_returns_502(auth_client, monkeypatch):
             return "not even a dict"
 
     monkeypatch.setattr("app.routers.ai.get_ai_provider", lambda: GarbageProvider())
-    course = auth_client.post("/courses/", json={"title": "Math"}).json()
+    course = auth_client.post(
+        "/courses/", json={"title": "Math", "description": "Algebra basics"}
+    ).json()
     response = auth_client.post(f"/ai/generate-quiz/{course['id']}")
     assert response.status_code == 502
 
@@ -78,6 +84,118 @@ def test_generate_quiz_num_questions_bounds(auth_client, monkeypatch):
         f"/ai/generate-quiz/{course['id']}", params={"num_questions": 0}
     )
     assert response.status_code == 422
+
+
+def test_generate_quiz_empty_course_returns_422_without_calling_ai(
+    auth_client, monkeypatch
+):
+    class UnusedProvider:
+        async def generate_structured_json(self, prompt, system_prompt=""):
+            raise AssertionError("AI must not be called")
+
+    monkeypatch.setattr("app.routers.ai.get_ai_provider", lambda: UnusedProvider())
+    course = auth_client.post("/courses/", json={"title": "Empty"}).json()
+    response = auth_client.post(f"/ai/generate-quiz/{course['id']}")
+    assert response.status_code == 422
+
+
+def test_generate_quiz_prompt_includes_notes_and_transcripts(auth_client, monkeypatch):
+    provider = RecordingProvider(
+        data={
+            "title": "Quiz",
+            "questions": [
+                {
+                    "text": "Q?",
+                    "answers": [
+                        {"text": "A", "is_correct": True},
+                        {"text": "B", "is_correct": False},
+                    ],
+                }
+            ],
+        }
+    )
+    monkeypatch.setattr("app.routers.ai.get_ai_provider", lambda: provider)
+    course = auth_client.post("/courses/", json={"title": "Bio"}).json()
+    auth_client.post(
+        "/notes/",
+        params={"generate_summary": False},
+        json={
+            "title": "Cells",
+            "content": "Mitochondria produce ATP",
+            "course_id": course["id"],
+        },
+    )
+    asyncio.run(
+        _insert_video(UUID(course["id"]), "Lecture 1", "Ribosomes build proteins")
+    )
+
+    response = auth_client.post(f"/ai/generate-quiz/{course['id']}")
+
+    assert response.status_code == 201
+    prompt, _ = provider.calls[0]
+    assert "Mitochondria produce ATP" in prompt
+    assert "Ribosomes build proteins" in prompt
+
+
+def test_generated_quiz_detail_exposes_answers(auth_client, monkeypatch):
+    provider = RecordingProvider(
+        data={
+            "title": "Quiz",
+            "questions": [
+                {
+                    "text": "Capital of Madagascar?",
+                    "explanation": "It is Antananarivo.",
+                    "answers": [
+                        {"text": "Antananarivo", "is_correct": True},
+                        {"text": "Toamasina", "is_correct": False},
+                    ],
+                }
+            ],
+        }
+    )
+    monkeypatch.setattr("app.routers.ai.get_ai_provider", lambda: provider)
+    course = auth_client.post(
+        "/courses/", json={"title": "Geo", "description": "Capitals"}
+    ).json()
+    quiz_id = auth_client.post(f"/ai/generate-quiz/{course['id']}").json()["quiz_id"]
+
+    quiz = auth_client.get(f"/quizzes/{quiz_id}").json()
+
+    answers = quiz["questions"][0]["answers"]
+    assert {(a["text"], a["is_correct"]) for a in answers} == {
+        ("Antananarivo", True),
+        ("Toamasina", False),
+    }
+
+
+async def _insert_video(course_id, title, transcript):
+    async with TestingSessionLocal() as session:
+        session.add(
+            VideoModel(
+                title=title,
+                storage_key=f"test/{uuid4()}.mp4",
+                transcript=transcript,
+                course_id=course_id,
+            )
+        )
+        await session.commit()
+
+
+def test_collect_course_material_truncates_to_budget():
+    user = _db_user()
+
+    async def _scenario():
+        async with TestingSessionLocal() as session:
+            course = await create_course(
+                CourseCreate(title="Long", description="x" * 500), session, user
+            )
+            return await collect_course_material(
+                session, course.id, course.description, max_chars=100
+            )
+
+    material = asyncio.run(_scenario())
+    assert len(material) == 100
+    assert material.startswith("## Course description")
 
 
 def test_summary_uses_grounded_system_prompt():
@@ -317,7 +435,8 @@ def _run(fn, *args, **kwargs):
 
 
 def _create_course_direct(user):
-    return _run(create_course, CourseCreate(title="Math"), user=user).id
+    course = CourseCreate(title="Math", description="Algebra basics")
+    return _run(create_course, course, user=user).id
 
 
 def test_direct_generate_quiz_success(monkeypatch):

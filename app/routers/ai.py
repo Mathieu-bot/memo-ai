@@ -15,6 +15,7 @@ from app.models import Question as QuestionModel
 from app.models import Quiz as QuizModel
 from app.models import User
 from app.services.ai import QuizGenerator, get_ai_provider
+from app.services.course_material import collect_course_material
 
 router = APIRouter(prefix="/ai", tags=["ai"])
 settings = get_settings()
@@ -63,12 +64,19 @@ async def generate_quiz(
 ):
     course = await get_course_or_404(db, user, course_id, write=True)
 
-    provider = get_ai_provider()
-    quiz_generator = QuizGenerator(provider)
+    material = await collect_course_material(db, course.id, course.description)
+    if not material:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Course has no description, notes or transcripts to quiz on",
+        )
+
     try:
+        provider = get_ai_provider()
+        quiz_generator = QuizGenerator(provider)
         quiz_data = await quiz_generator.generate(
             title=course.title,
-            description=course.description or "",
+            content=material,
             num_questions=num_questions,
         )
     except AIServiceError as exc:

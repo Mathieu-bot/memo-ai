@@ -15,6 +15,7 @@ from app.auth import current_user
 from app.dependencies import get_db
 from app.exceptions import NotFoundError
 from app.models import Course as CourseModel
+from app.models import Question as QuestionModel
 from app.models import Quiz as QuizModel
 from app.models import User
 from app.schemas import Quiz, QuizCreate, QuizUpdate, QuizWithQuestions
@@ -63,7 +64,7 @@ async def get_quiz(
 ):
     statement = (
         select(QuizModel)
-        .options(selectinload(QuizModel.questions))
+        .options(selectinload(QuizModel.questions).selectinload(QuestionModel.answers))
         .join(CourseModel, QuizModel.course_id == CourseModel.id)
         .where(QuizModel.id == quiz_id, course_readable_condition(user.id))
     )
