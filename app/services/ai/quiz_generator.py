@@ -16,7 +16,7 @@ QUIZ_SYSTEM_PROMPT = (
 
 QUIZ_PROMPT_TEMPLATE = (
     "Generate a quiz with {num_questions} questions about: {title}\n\n"
-    "Course content: {description}\n\n"
+    "Course content:\n{content}\n\n"
     "Return EXACTLY this JSON structure:\n"
     "{{\n"
     '  "title": "Quiz: {title}",\n'
@@ -59,10 +59,10 @@ class QuizGenerator:
         )
 
     async def generate(
-        self, title: str, description: str, num_questions: int = 5
+        self, title: str, content: str, num_questions: int = 5
     ) -> dict[str, Any]:
         prompt = QUIZ_PROMPT_TEMPLATE.format(
-            title=title, description=description or "", num_questions=num_questions
+            title=title, content=content or "", num_questions=num_questions
         )
         result: dict[str, Any] = {}
         for attempt in range(STRUCTURE_ATTEMPTS):
