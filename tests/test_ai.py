@@ -137,6 +137,37 @@ def test_generate_quiz_prompt_includes_notes_and_transcripts(auth_client, monkey
     assert "Ribosomes build proteins" in prompt
 
 
+def test_generated_quiz_detail_exposes_answers(auth_client, monkeypatch):
+    provider = RecordingProvider(
+        data={
+            "title": "Quiz",
+            "questions": [
+                {
+                    "text": "Capital of Madagascar?",
+                    "explanation": "It is Antananarivo.",
+                    "answers": [
+                        {"text": "Antananarivo", "is_correct": True},
+                        {"text": "Toamasina", "is_correct": False},
+                    ],
+                }
+            ],
+        }
+    )
+    monkeypatch.setattr("app.routers.ai.get_ai_provider", lambda: provider)
+    course = auth_client.post(
+        "/courses/", json={"title": "Geo", "description": "Capitals"}
+    ).json()
+    quiz_id = auth_client.post(f"/ai/generate-quiz/{course['id']}").json()["quiz_id"]
+
+    quiz = auth_client.get(f"/quizzes/{quiz_id}").json()
+
+    answers = quiz["questions"][0]["answers"]
+    assert {(a["text"], a["is_correct"]) for a in answers} == {
+        ("Antananarivo", True),
+        ("Toamasina", False),
+    }
+
+
 async def _insert_video(course_id, title, transcript):
     async with TestingSessionLocal() as session:
         session.add(

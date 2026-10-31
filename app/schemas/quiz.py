@@ -2,7 +2,7 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from app.schemas.question import Question
+from app.schemas.question import QuestionWithAnswers
 
 
 class QuizBase(BaseModel):
@@ -38,4 +38,4 @@ class Quiz(QuizInDBBase):
 
 
 class QuizWithQuestions(Quiz):
-    questions: list[Question] = []
+    questions: list[QuestionWithAnswers] = []
