@@ -25,3 +25,9 @@ class Note(Base):
     )
 
     course = relationship("Course", back_populates="notes")
+    flashcards = relationship(
+        "Flashcard",
+        back_populates="note",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+    )

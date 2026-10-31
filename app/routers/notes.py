@@ -16,9 +16,17 @@ from app.dependencies import get_db
 from app.exceptions import AIServiceError, NotFoundError
 from app.limiter import limiter
 from app.models import Course as CourseModel
+from app.models import Flashcard as FlashcardModel
 from app.models import Note as NoteModel
 from app.models import User
-from app.schemas import Note, NoteCreate, NoteUpdate, NoteWithSummary
+from app.schemas import (
+    Flashcard,
+    FlashcardBatch,
+    Note,
+    NoteCreate,
+    NoteUpdate,
+    NoteWithSummary,
+)
 from app.services.ai import FlashcardService, SummaryService, get_ai_provider
 
 router = APIRouter(prefix="/notes", tags=["notes"])
@@ -182,7 +190,23 @@ async def summarize_note(
     return db_note
 
 
-@router.post("/{note_id}/generate-flashcards", status_code=status.HTTP_200_OK)
+def _valid_cards(cards) -> list[tuple[str, str]]:
+    valid = []
+    for card in cards or []:
+        if not isinstance(card, dict):
+            continue
+        front, back = card.get("front"), card.get("back")
+        if isinstance(front, str) and front.strip() and isinstance(back, str):
+            if back.strip():
+                valid.append((front.strip(), back.strip()))
+    return valid
+
+
+@router.post(
+    "/{note_id}/generate-flashcards",
+    response_model=FlashcardBatch,
+    status_code=status.HTTP_201_CREATED,
+)
 @limiter.limit(settings.RATE_LIMIT_AI)
 async def generate_flashcards(
     request: Request,
@@ -191,16 +215,42 @@ async def generate_flashcards(
     user: Annotated[User, Depends(current_user)],
     num_cards: Annotated[int, Query(ge=1, le=25)] = 10,
 ):
-    db_note = await _get_accessible_note_or_404(note_id, user, db)
+    db_note = await _get_owned_note_or_404(note_id, user, db)
 
-    provider = get_ai_provider()
-    flashcard_service = FlashcardService(provider)
     try:
-        flashcards = await flashcard_service.generate(db_note.content, num_cards)
+        provider = get_ai_provider()
+        flashcard_service = FlashcardService(provider)
+        generated = await flashcard_service.generate(db_note.content, num_cards)
     except AIServiceError as exc:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="AI flashcard generation failed",
         ) from exc
 
-    return {"note_id": note_id, "flashcards": flashcards}
+    cards = [
+        FlashcardModel(front=front, back=back, note_id=db_note.id)
+        for front, back in _valid_cards(generated)
+    ]
+    db.add_all(cards)
+    await db.commit()
+    for card in cards:
+        await db.refresh(card)
+    return FlashcardBatch(
+        note_id=db_note.id,
+        flashcards=[Flashcard.model_validate(card) for card in cards],
+    )
+
+
+@router.get("/{note_id}/flashcards", response_model=list[Flashcard])
+async def list_flashcards(
+    note_id: UUID,
+    db: Annotated[AsyncSession, Depends(get_db)],
+    user: Annotated[User, Depends(current_user)],
+):
+    db_note = await _get_accessible_note_or_404(note_id, user, db)
+    statement = (
+        select(FlashcardModel)
+        .where(FlashcardModel.note_id == db_note.id)
+        .order_by(FlashcardModel.created_at)
+    )
+    return (await db.execute(statement)).scalars().all()
